@@ -40,6 +40,23 @@ PYTHONPATH=src python3 -m hidetext.cli eval \
   --seed 29
 ```
 
+如果你希望从文件读取 `prompt`、`passphrase` 或 `seed`，CLI 现在也支持：
+
+```bash
+PYTHONPATH=src python3 -m hidetext.cli eval \
+  --prompt-file prompts/zh.txt \
+  --passphrase-file secrets/passphrase.txt \
+  --seed-file secrets/seed.txt \
+  --message '今晚七点在老地方见。'
+```
+
+其中：
+
+- `--prompt-file` 读取 UTF-8 文本作为 prompt
+- `--passphrase-file` 读取 UTF-8 文本作为口令
+- `--seed-file` 读取文本里的整数作为 seed
+- 文件末尾多余的换行会被自动去掉
+
 如果你想分别编码和解码：
 
 ```bash

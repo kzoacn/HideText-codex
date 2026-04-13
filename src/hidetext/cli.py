@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from .config import RuntimeConfig
 from .decoder import StegoDecoder
@@ -15,9 +16,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for name in ("encode", "decode", "eval"):
         subparser = subparsers.add_parser(name)
-        subparser.add_argument("--prompt", required=True)
-        subparser.add_argument("--passphrase", required=True)
-        subparser.add_argument("--seed", type=int, default=7)
+        prompt_group = subparser.add_mutually_exclusive_group(required=True)
+        prompt_group.add_argument("--prompt")
+        prompt_group.add_argument("--prompt-file")
+
+        passphrase_group = subparser.add_mutually_exclusive_group(required=True)
+        passphrase_group.add_argument("--passphrase")
+        passphrase_group.add_argument("--passphrase-file")
+
+        seed_group = subparser.add_mutually_exclusive_group(required=False)
+        seed_group.add_argument("--seed", type=int)
+        seed_group.add_argument("--seed-file")
 
     encode_parser = subparsers.choices["encode"]
     encode_parser.add_argument("--message", required=True)
@@ -30,21 +39,67 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _read_text_file(path_str: str) -> str:
+    try:
+        return Path(path_str).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"failed to read file {path_str!r}: {exc}") from exc
+
+
+def _resolve_text_value(
+    direct_value: str | None,
+    file_value: str | None,
+    *,
+    label: str,
+    strip_trailing_newlines: bool = True,
+) -> str:
+    if direct_value is not None:
+        return direct_value
+    if file_value is None:
+        raise ValueError(f"missing {label}")
+    text = _read_text_file(file_value)
+    if strip_trailing_newlines:
+        text = text.rstrip("\r\n")
+    return text
+
+
+def _resolve_seed(args: argparse.Namespace) -> int:
+    if args.seed is not None:
+        return args.seed
+    if args.seed_file is None:
+        return 7
+    raw_text = _read_text_file(args.seed_file).strip()
+    try:
+        return int(raw_text)
+    except ValueError as exc:
+        raise ValueError(f"seed file {args.seed_file!r} does not contain a valid integer") from exc
+
+
 def _config_from_args(args: argparse.Namespace) -> RuntimeConfig:
-    return RuntimeConfig(seed=args.seed)
+    return RuntimeConfig(seed=_resolve_seed(args))
 
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+    try:
+        prompt = _resolve_text_value(args.prompt, args.prompt_file, label="prompt")
+        passphrase = _resolve_text_value(
+            args.passphrase,
+            args.passphrase_file,
+            label="passphrase",
+        )
+        config = _config_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     backend = ToyCharBackend()
-    config = _config_from_args(args)
 
     if args.command == "encode":
         result = StegoEncoder(backend, config).encode(
             args.message,
-            passphrase=args.passphrase,
-            prompt=args.prompt,
+            passphrase=passphrase,
+            prompt=prompt,
         )
         print(
             json.dumps(
@@ -73,8 +128,8 @@ def main() -> None:
     if args.command == "decode":
         result = StegoDecoder(backend, config).decode(
             args.text,
-            passphrase=args.passphrase,
-            prompt=args.prompt,
+            passphrase=passphrase,
+            prompt=prompt,
         )
         print(
             json.dumps(
@@ -92,8 +147,8 @@ def main() -> None:
     if args.command == "eval":
         encoder = StegoEncoder(backend, config)
         decoder = StegoDecoder(backend, config)
-        encoded = encoder.encode(args.message, passphrase=args.passphrase, prompt=args.prompt)
-        decoded = decoder.decode(encoded.text, passphrase=args.passphrase, prompt=args.prompt)
+        encoded = encoder.encode(args.message, passphrase=passphrase, prompt=prompt)
+        decoded = decoder.decode(encoded.text, passphrase=passphrase, prompt=prompt)
         print(
             json.dumps(
                 {
@@ -114,4 +169,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
