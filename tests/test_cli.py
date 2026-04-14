@@ -6,6 +6,17 @@ import sys
 import tempfile
 import unittest
 
+from hidetext import cli
+from hidetext.model_assets import (
+    DEFAULT_BACKEND,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_CTX_SIZE,
+    DEFAULT_MAX_CANDIDATES,
+    DEFAULT_MODEL_ID,
+    DEFAULT_SEED,
+    DEFAULT_TOP_P,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,25 +50,25 @@ class CliTests(unittest.TestCase):
 
         encoded = self._run_completed(
             "encode",
+            "--backend",
+            "toy",
             "--prompt",
             prompt,
             "--passphrase",
             passphrase,
             "--message",
             message,
-            "--seed",
-            "11",
         )
         self.assertTrue(encoded.stdout)
         self.assertFalse(encoded.stdout.startswith("{"))
         decoded = self._run_completed(
             "decode",
+            "--backend",
+            "toy",
             "--prompt",
             prompt,
             "--passphrase",
             passphrase,
-            "--seed",
-            "11",
             input_text=encoded.stdout,
         )
         self.assertEqual(decoded.stdout, message)
@@ -79,6 +90,8 @@ class CliTests(unittest.TestCase):
 
             encoded = self._run(
                 "encode",
+                "--backend",
+                "toy",
                 "--json",
                 "--prompt-file",
                 str(prompt_path),
@@ -91,6 +104,8 @@ class CliTests(unittest.TestCase):
             )
             decoded = self._run(
                 "decode",
+                "--backend",
+                "toy",
                 "--json",
                 "--prompt-file",
                 str(prompt_path),
@@ -112,6 +127,8 @@ class CliTests(unittest.TestCase):
 
         encoded = self._run(
             "encode",
+            "--backend",
+            "toy",
             "--json",
             "--prompt",
             prompt,
@@ -119,11 +136,11 @@ class CliTests(unittest.TestCase):
             passphrase,
             "--message",
             message,
-            "--seed",
-            "17",
         )
         decoded = self._run(
             "decode",
+            "--backend",
+            "toy",
             "--json",
             "--prompt",
             prompt,
@@ -131,8 +148,6 @@ class CliTests(unittest.TestCase):
             passphrase,
             "--text",
             str(encoded["text"]),
-            "--seed",
-            "17",
         )
 
         self.assertEqual(decoded["plaintext"], message)
@@ -143,14 +158,14 @@ class CliTests(unittest.TestCase):
     def test_eval_progress_goes_to_stderr(self) -> None:
         completed = self._run_completed(
             "eval",
+            "--backend",
+            "toy",
             "--prompt",
             "请写一段温柔自然的中文短文。",
             "--passphrase",
             "progress-pass",
             "--message",
             "进度日志可见",
-            "--seed",
-            "13",
             "--show-progress",
             "--progress-token-interval",
             "400",
@@ -159,14 +174,16 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["roundtrip_ok"])
         self.assertIn("tail_tokens", payload)
         self.assertIn("decode_trailing_tokens", payload)
-        self.assertIn("[encode][header]", completed.stderr)
-        self.assertIn("bits=", completed.stderr)
-        self.assertIn("tps=", completed.stderr)
-        self.assertIn("bpt=", completed.stderr)
+        self.assertIn("encode/header", completed.stderr)
+        self.assertIn("|", completed.stderr)
+        self.assertIn("tok/s", completed.stderr)
+        self.assertIn("bpt ", completed.stderr)
 
     def test_stall_patience_argument_is_accepted(self) -> None:
         payload = self._run(
             "encode",
+            "--backend",
+            "toy",
             "--json",
             "--prompt",
             "Write a calm and readable English paragraph.",
@@ -174,8 +191,6 @@ class CliTests(unittest.TestCase):
             "cli-pass",
             "--message",
             "CLI roundtrip works.",
-            "--seed",
-            "11",
             "--natural-tail-max-tokens",
             "8",
             "--stall-patience-tokens",
@@ -190,6 +205,66 @@ class CliTests(unittest.TestCase):
         self.assertIn("text", payload)
         self.assertIn("attempts_used", payload)
         self.assertIn("tail_tokens", payload)
+
+    def test_parser_defaults_match_real_model_profile(self) -> None:
+        parser = cli._build_parser()
+        args = parser.parse_args(
+            [
+                "encode",
+                "--prompt",
+                "Write a calm and readable English paragraph.",
+                "--passphrase",
+                "cli-pass",
+                "--message",
+                "CLI roundtrip works.",
+            ]
+        )
+
+        self.assertEqual(args.backend, DEFAULT_BACKEND)
+        self.assertEqual(args.ctx_size, DEFAULT_CTX_SIZE)
+        self.assertEqual(args.batch_size, DEFAULT_BATCH_SIZE)
+        self.assertEqual(args.top_p, DEFAULT_TOP_P)
+        self.assertEqual(args.max_candidates, DEFAULT_MAX_CANDIDATES)
+        self.assertEqual(cli._resolve_seed(args), DEFAULT_SEED)
+
+    def test_default_model_id_is_used_for_cached_default_model(self) -> None:
+        parser = cli._build_parser()
+        args = parser.parse_args(
+            [
+                "encode",
+                "--prompt",
+                "Write a calm and readable English paragraph.",
+                "--passphrase",
+                "cli-pass",
+                "--message",
+                "CLI roundtrip works.",
+            ]
+        )
+
+        self.assertEqual(
+            cli._resolve_model_id(args, resolved_model_source="cache"),
+            DEFAULT_MODEL_ID,
+        )
+
+    def test_custom_model_path_defaults_to_inferred_model_id(self) -> None:
+        parser = cli._build_parser()
+        args = parser.parse_args(
+            [
+                "encode",
+                "--model-path",
+                "/tmp/demo.gguf",
+                "--prompt",
+                "Write a calm and readable English paragraph.",
+                "--passphrase",
+                "cli-pass",
+                "--message",
+                "CLI roundtrip works.",
+            ]
+        )
+
+        self.assertIsNone(
+            cli._resolve_model_id(args, resolved_model_source="explicit"),
+        )
 
 
 if __name__ == "__main__":

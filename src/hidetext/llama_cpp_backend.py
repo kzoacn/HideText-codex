@@ -10,16 +10,36 @@ from typing import Any
 import numpy as np
 
 from .errors import ModelBackendError
+from .model_assets import DEFAULT_MODEL_ID
 from .model_backend import BackendMetadata, RawNextTokenDistribution
 
 
-QWEN3_USER_PROMPT_TEMPLATE = "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+@dataclass(frozen=True)
+class PromptTemplateSpec:
+    template_id: str
+    template_text: str
+
+    def render(self, prompt: str) -> str:
+        return self.template_text.format(prompt=prompt)
+
+
+QWEN3_PROMPT_TEMPLATE = PromptTemplateSpec(
+    template_id="qwen3-user-assistant-v1",
+    template_text="<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
+)
+QWEN35_PROMPT_TEMPLATE = PromptTemplateSpec(
+    template_id="qwen3_5-user-assistant-no-thinking-v1",
+    template_text=(
+        "<|im_start|>user\n{prompt}<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    ),
+)
 
 
 @dataclass(frozen=True)
 class LlamaCppBackendConfig:
     model_path: str
-    model_id: str = "Qwen/Qwen3-4B-Instruct-2507"
+    model_id: str | None = DEFAULT_MODEL_ID
     n_ctx: int = 4096
     n_batch: int = 256
     n_threads: int | None = None
@@ -61,9 +81,22 @@ class QwenLlamaCppBackend:
         self._cached_prompt_token_ids: list[int] = []
         self._cached_generated_token_ids: list[int] = []
         self._blocked_token_ids = self._build_blocked_token_ids()
+        llama_metadata = getattr(self._llm, "metadata", {})
+        self._prompt_template = resolve_qwen_prompt_template(
+            config.model_id,
+            llama_metadata,
+        )
+        inferred_model_id = config.model_id or _infer_model_id(
+            model_path,
+            llama_metadata,
+        )
         self._metadata = BackendMetadata(
-            model_id=config.model_id,
-            tokenizer_hash=self._metadata_hash(model_path),
+            model_id=inferred_model_id,
+            tokenizer_hash=build_llama_cpp_tokenizer_hash(
+                model_path,
+                llama_metadata,
+                prompt_template_id=self._prompt_template.template_id,
+            ),
             backend_id="llama-cpp-qwen3",
         )
 
@@ -149,7 +182,7 @@ class QwenLlamaCppBackend:
     def _prompt_token_ids(self, prompt: str) -> list[int]:
         if prompt == self._cached_prompt and self._cached_prompt_token_ids:
             return list(self._cached_prompt_token_ids)
-        prompt_text = QWEN3_USER_PROMPT_TEMPLATE.format(prompt=prompt)
+        prompt_text = self._prompt_template.render(prompt)
         try:
             return self._llm.tokenize(
                 prompt_text.encode("utf-8"),
@@ -182,13 +215,53 @@ class QwenLlamaCppBackend:
                 blocked.add(int(token_ids[0]))
         return blocked
 
-    def _metadata_hash(self, model_path: Path) -> str:
-        payload: dict[str, Any] = {
-            "path": str(model_path.resolve()),
-            "size": model_path.stat().st_size,
-            "llama_metadata": getattr(self._llm, "metadata", {}),
-            "prompt_template": "qwen3-user-assistant-v1",
-        }
-        return sha256(
-            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
+
+def build_llama_cpp_tokenizer_hash(
+    model_path: Path,
+    llama_metadata: dict[str, Any],
+    *,
+    prompt_template_id: str,
+) -> str:
+    payload: dict[str, Any] = {
+        "size": model_path.stat().st_size,
+        "head_sha256": _partial_file_hash(model_path, from_start=True),
+        "tail_sha256": _partial_file_hash(model_path, from_start=False),
+        "llama_metadata": llama_metadata,
+        "prompt_template": prompt_template_id,
+    }
+    return sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _partial_file_hash(model_path: Path, *, from_start: bool, chunk_size: int = 1 << 20) -> str:
+    with model_path.open("rb") as handle:
+        if not from_start:
+            size = model_path.stat().st_size
+            handle.seek(max(0, size - chunk_size))
+        data = handle.read(chunk_size)
+    return sha256(data).hexdigest()
+
+
+def _infer_model_id(model_path: Path, llama_metadata: dict[str, Any]) -> str:
+    for key in ("general.name", "general.basename"):
+        value = llama_metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return model_path.stem
+
+
+def resolve_qwen_prompt_template(
+    model_id: str | None,
+    llama_metadata: dict[str, Any],
+) -> PromptTemplateSpec:
+    model_markers = []
+    if model_id:
+        model_markers.append(model_id.lower())
+    for key in ("general.name", "general.basename"):
+        value = llama_metadata.get(key)
+        if isinstance(value, str):
+            model_markers.append(value.lower())
+    if any("qwen3.5" in marker for marker in model_markers):
+        return QWEN35_PROMPT_TEMPLATE
+    return QWEN3_PROMPT_TEMPLATE

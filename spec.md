@@ -62,6 +62,11 @@ HideText 是一个基于大模型 next-token 分布的自然语言隐写工程 d
 
 如果上述任一条件不一致，系统应当显式失败，而不是尝试“近似解码”。
 
+补充约束：
+
+- 本地模型文件所在目录不是协议的一部分
+- 同一份模型文件即使位于不同机器或不同缓存路径，只要模型内容、tokenizer 与运行配置一致，就不应仅因为本地路径不同而导致配置指纹漂移
+
 ## 5. 术语
 
 - `D_t`：第 `t` 步的 next-token 分布。
@@ -78,8 +83,8 @@ HideText 是一个基于大模型 next-token 分布的自然语言隐写工程 d
 1. `crypto layer`
    - 把用户明文变成加密后的二进制 packet
 2. `model backend`
-   - 当前代码用一个确定性的双语 toy backend 做端到端验证
-   - 后续可替换为真实本地模型推理与 logits / logprobs 提取
+   - 当前默认 CLI 路径使用真实本地 `llama.cpp` backend
+   - 仓库仍保留一个确定性的双语 toy backend 用于协议测试与快速回归
 3. `candidate policy`
    - 决定哪些 token 可参与编码
 4. `quantization layer`
@@ -103,11 +108,26 @@ HideText 是一个基于大模型 next-token 分布的自然语言隐写工程 d
 - 单机本地加载
 - 稳定获得全词表 logits
 - 可锁定 tokenizer 与模型版本
+- 本地已存在时直接复用；本地不存在时自动下载默认模型
 
 当前仓库已经落地了两类 backend：
 
-- `ToyCharBackend`：用于快速、可重复的协议验证
-- `QwenLlamaCppBackend`：用于真实本地模型 CPU 集成测试
+- `QwenLlamaCppBackend`：当前默认 CLI backend，面向真实本地模型 CPU 推理
+- `ToyCharBackend`：用于快速、可重复的协议验证与测试
+
+当前默认 CLI 模型配置为：
+
+- `model_id = Qwen/Qwen3.5-2B`
+- GGUF 来源：`bartowski/Qwen_Qwen3.5-2B-GGUF`
+- 默认文件：`Qwen_Qwen3.5-2B-Q4_K_S.gguf`
+- 默认缓存目录：`~/.cache/hidetext/models/qwen35-2b-q4ks/`
+
+对于不同模型家族，backend 还必须固定对应的 `prompt_template_id`。例如：
+
+- `Qwen3` 默认使用 `qwen3-user-assistant-v1`
+- `Qwen3.5` 非思维模式默认使用 `qwen3_5-user-assistant-no-thinking-v1`
+
+这些模板差异会直接影响首 token 分布，因此属于协议敏感项，必须进入 backend 元数据与配置指纹。
 
 ## 8. 默认使用场景
 
@@ -392,6 +412,29 @@ max_encode_attempts = 3
 
 - 先保证稳定性
 - 再逐步向更高容量推进
+
+当前 CLI 为真实 `llama.cpp` backend 预置了一套更偏“开箱即用”的默认值：
+
+```text
+seed = 7
+ctx_size = 4096
+batch_size = 128
+top_p = 0.995
+max_candidates = 64
+min_entropy_bits = 0.0
+totfreq = 4096
+natural_tail_max_tokens = 64
+low_entropy_window_tokens = 32
+low_entropy_threshold_bits = 0.1
+max_encode_attempts = 3
+```
+
+目标是让普通用户通常只需要提供：
+
+- `prompt`
+- `passphrase`
+- `message`
+- 以及可选的 `show-progress`
 
 ## 17. 失败模式
 

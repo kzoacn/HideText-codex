@@ -2,284 +2,173 @@
 
 [English README](README.md)
 
-HideText 是一个确定性的文本隐写 demo：它不是先生成自然语言再做后处理，而是直接把加密后的秘密载荷映射到语言模型每一步的 next-token 选择里。在发送端和接收端共享同一模型、tokenizer、prompt、seed 和 codec 配置的前提下，接收端可以镜像重放这些分布并恢复明文。
+HideText 是一个确定性的文本隐写 demo。它会先加密消息，再把密文映射到语言模型生成时的 token 选择里；只要发送端和接收端共享同一模型、prompt、口令和 seed，就可以把消息恢复出来。
 
-这个仓库优先保证的是可复现和可解码，然后才是自然度与容量。
-
-## 已实现能力
-
-- 带运行时配置指纹的固定 packet framing
-- `scrypt + ChaCha20-Poly1305` 的 encrypt-then-stego 载荷构造
-- 确定性的候选集裁剪与整数频数量化
-- 整数 finite-interval header/body codec
-- 用于快速协议验证的双语 toy backend
-- 基于 `llama.cpp` 的本地 Qwen GGUF CPU 后端
-- `encode` / `decode` / `eval` CLI
-- 对 prompt 漂移、seed 漂移、文本改动、重试耗尽的 fail-closed 测试
-- 低熵监测与自动重试
-- secret-bearing prefix 完成后的自然尾部生成
-- 候选 token 的重分词稳定性过滤，避免 `'冷却'` / `'冷'+'却'` 这类解码歧义
+现在默认的用户路径已经切到真实本地 `llama.cpp` 后端。`toy` backend 仍然保留，但主要用于测试和协议调试。
 
 ## 快速开始
 
-创建本地虚拟环境并安装基础依赖：
+先安装带本地 LLM 支持的版本：
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m ensurepip --upgrade
 .venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e .
-```
-
-运行默认测试：
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-## 真实模型环境
-
-安装可选的本地 LLM 依赖：
-
-```bash
 .venv/bin/python -m pip install -e '.[llm]'
 ```
 
-下载当前验证过的 GGUF 模型：
+用一条命令先跑通一次 round-trip：
 
 ```bash
-.venv/bin/python - <<'PY'
-from huggingface_hub import hf_hub_download
-
-path = hf_hub_download(
-    repo_id="bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF",
-    filename="Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-    local_dir="models/qwen3-4b-q4km",
-)
-print(path)
-PY
-```
-
-运行真实模型 smoke test：
-
-```bash
-HIDETEXT_LLAMA_MODEL_PATH=/abs/path/to/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-HIDETEXT_LLAMA_THREADS=8 \
-HIDETEXT_LLAMA_CTX=4096 \
-HIDETEXT_LLAMA_BATCH=128 \
-.venv/bin/python -m unittest tests.test_llama_cpp_integration -v
-```
-
-当前仓库已经在本地完成过：
-
-- toy backend 的完整默认测试
-- `Qwen/Qwen3-4B-Instruct-2507` GGUF `Q4_K_M` 的 CPU round-trip smoke test
-
-## 低熵自动重试
-
-当模型进入近乎确定性的低熵区域时，候选集会退化到几乎无法承载信息，极端情况下只有一个 token，消息就可能编码不进去。HideText 现在默认会这样处理：
-
-- 监测连续 `32` 个 token step 的滚动窗口
-- 如果这个窗口上的平均候选熵低于 `0.1` bit，就放弃当前尝试
-- 用新的随机 salt / nonce 重新生成 packet，再做一次编码
-- 如果连续 `3` 次都失败，就显式报错，并建议更换 cover prompt 或减少消息长度
-
-这些参数都是发送端本地运行时安全策略，不进入 packet fingerprint：
-
-- `--low-entropy-window-tokens`
-- `--low-entropy-threshold-bits`
-- `--max-encode-attempts`
-- `--stall-patience-tokens`
-
-如果你在做固定 packet 的受控实验，可以传 `--low-entropy-window-tokens 0` 显式关闭这个 detector。
-
-## 自然结束
-
-HideText 现在不必在 packet 刚好可解码的那个 token 上硬停。只要 header 和 body 都已经编码完成：
-
-- 承载秘密的前缀已经完整，可被解码
-- 发送端可以继续随机采样一小段尾部，让文本结尾更自然
-- 这段尾部不参与 codec，解码端会直接忽略
-- 解码端在 packet 完整恢复后就停止，不要求文本也在那个位置结束
-
-可以用 `--natural-tail-max-tokens` 限制这段尾部的最大长度；如果传 `0`，就会回到“编码完成立即停止”的旧行为。
-
-## 重分词安全性
-
-HideText 现在会主动过滤那些“表面文本一样，但重新 tokenize 后 token 路径会变掉”的候选。例如：
-
-- 一个 token 直接渲染成 `冷却`
-- 两步分别渲染成 `冷` 和 `却`
-
-虽然最终可见文本一样，但解码端回放的是 token id 序列，不是字符串本身。因此当前协议会要求候选满足下面的 round-trip 条件：
-
-- 先把候选 token 接到当前 token 前缀后面
-- 把整段前缀 detokenize 成文本
-- 再对这段文本重新 tokenize
-- 只有当得到的 token 序列与原前缀完全一致时，这个候选才允许参与编码
-
-如果过滤后只剩 1 个稳定候选，这一步就退化成非编码步；如果一个稳定候选都不剩，就显式报错，而不是继续输出可能无法解码的文本。
-
-如果这种情况发生在承载秘密的正文前缀里，编码器现在会把它视为可重试错误：重新生成一组随机 `salt / nonce`，再按 `--max-encode-attempts` 的上限重试。
-
-## CLI 用法
-
-toy backend round-trip：
-
-```bash
-.venv/bin/python -m hidetext.cli eval \
+.venv/bin/hidetext eval \
   --show-progress \
-  --prompt 'Write a calm and readable English paragraph.' \
-  --passphrase pass-en \
-  --message 'Meet me near the station at seven.' \
-  --seed 29
-```
-
-真实 Qwen CPU round-trip：
-
-```bash
-.venv/bin/python -m hidetext.cli eval \
-  --show-progress \
-  --backend llama-cpp \
-  --model-path models/qwen3-4b-q4km/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-  --threads 8 \
-  --ctx-size 4096 \
-  --batch-size 128 \
-  --top-p 0.995 \
-  --max-candidates 64 \
-  --min-entropy-bits 0.0 \
-  --totfreq 4096 \
-  --header-token-budget 1024 \
-  --body-token-budget 4096 \
-  --natural-tail-max-tokens 64 \
-  --stall-patience-tokens 256 \
-  --low-entropy-window-tokens 32 \
-  --low-entropy-threshold-bits 0.1 \
-  --max-encode-attempts 3 \
   --prompt '请写一段自然、简短、连贯的中文段落，描写傍晚散步时看到的街景。' \
-  --passphrase real-pass \
-  --message '今晚七点在河边老地方见。' \
-  --seed 7
+  --passphrase demo-pass \
+  --message '今晚七点在河边老地方见。'
 ```
 
-如果希望从文件读取输入：
+第一次运行时，HideText 会按下面的顺序找模型：
+
+- 先看你有没有传 `--model-path`
+- 否则看 `HIDETEXT_MODEL_PATH` 或 `HIDETEXT_LLAMA_MODEL_PATH`
+- 如果还没有，就自动下载默认 GGUF 到 `~/.cache/hidetext/models/qwen35-2b-q4ks/`
+
+当前默认模型是：
+
+- model id: `Qwen/Qwen3.5-2B`
+- repo: `bartowski/Qwen_Qwen3.5-2B-GGUF`
+- file: `Qwen_Qwen3.5-2B-Q4_K_S.gguf`
+
+## 日常使用
+
+平时 `encode` 基本只需要这几个参数：
 
 ```bash
-.venv/bin/python -m hidetext.cli eval \
+.venv/bin/hidetext encode \
   --show-progress \
-  --prompt-file prompts/zh.txt \
-  --passphrase-file secrets/passphrase.txt \
-  --seed-file secrets/seed.txt \
-  --message '今晚七点在老地方见。'
+  --prompt '请写一段自然、简短、连贯的中文段落，描写傍晚散步时看到的街景。' \
+  --passphrase 'river-pass' \
+  --message '今晚七点在河边老地方见。'
 ```
 
-现在 `encode` 默认只输出隐写文本，`decode` 默认只输出恢复出的明文；如果想看之前那种详细元数据输出，可以在任一命令后面加 `--json`。
-
-这样就可以直接走 shell 管道：
+`decode` 默认会从标准输入读取隐写文本，所以最短路径通常是直接走管道：
 
 ```bash
-.venv/bin/python -m hidetext.cli encode \
+.venv/bin/hidetext encode \
   --show-progress \
-  --prompt '请写一段温柔自然的中文短文。' \
-  --passphrase pipe-pass \
-  --message '今晚七点在老地方见。' \
-  --seed 17 \
-| .venv/bin/python -m hidetext.cli decode \
-  --show-progress \
-  --prompt '请写一段温柔自然的中文短文。' \
-  --passphrase pipe-pass \
-  --seed 17
-```
-
-## 示例
-
-### 英文示例
-
-- Backend: `toy`
-- Prompt / cover prompt: `Write a calm and readable English paragraph about a quiet evening walk.`
-- Secret message: `Meet near the riverside at seven.`
-- Passphrase: `demo-en`
-- Seed: `29`
-
-命令：
-
-```bash
-.venv/bin/python -m hidetext.cli encode \
-  --show-progress \
-  --prompt 'Write a calm and readable English paragraph about a quiet evening walk.' \
-  --passphrase demo-en \
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
   --message 'Meet near the riverside at seven.' \
-  --seed 29
+| .venv/bin/hidetext decode \
+  --show-progress \
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass
 ```
 
-隐写文本片段：
-
-```text
-The afternoon feels cllm, and the corner cafe keeps a warm light on while people talk softlv along the street. A quiet breeze moves past the window, the pages stay hflf open on tte table, and the room keeps a steady brightness.
-```
-
-### 中文示例
-
-- Backend: `toy`
-- Prompt / cover prompt: `请写一段自然、柔和、连贯的中文短文，描写傍晚散步时看到的街景。`
-- Secret message: `今晚七点在河边老地方见。`
-- Passphrase: `demo-zh`
-- Seed: `17`
-
-命令：
+如果你想把生成出的文本先保存下来：
 
 ```bash
-.venv/bin/python -m hidetext.cli encode \
+.venv/bin/hidetext encode \
   --show-progress \
-  --prompt '请写一段自然、柔和、连贯的中文短文，描写傍晚散步时看到的街景。' \
-  --passphrase demo-zh \
-  --message '今晚七点在河边老地方见。' \
-  --seed 17
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Meet near the riverside at seven.' \
+  > stego.txt
+
+.venv/bin/hidetext decode \
+  --show-progress \
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --text-file stego.txt
 ```
 
-隐写文本片段：
+## 你通常不再需要操心的参数
 
-```text
-今天的风很轻，街角的咖啡店还亮着暖黄的静，路过的人慢慢聊着天，城天显得安静而柔和。午后的窗边有一轻淡淡香茶的，桌上书书翻到一半，雨声落在树叶上，房间里有种稳稳的明亮。
+CLI 现在内置了一套真实模型预设，所以多数情况下你不需要再手动调这些：
+
+- `--seed`
+- `--ctx-size`
+- `--batch-size`
+- `--top-p`
+- `--max-candidates`
+- `--min-entropy-bits`
+- `--totfreq`
+
+当前默认预设是：
+
+- backend: `llama-cpp`
+- seed: `7`
+- ctx size: `4096`
+- batch size: `128`
+- top-p: `0.995`
+- max candidates: `64`
+- min entropy bits: `0.0`
+- total frequency: `4096`
+
+也就是说，如果你不显式覆盖，CLI 就会直接用这组值。
+
+## 常见覆盖方式
+
+如果你已经有自己的 GGUF 模型：
+
+```bash
+.venv/bin/hidetext eval \
+  --model-path /abs/path/to/model.gguf \
+  --show-progress \
+  --prompt 'Write a short paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Meet near the riverside at seven.'
 ```
 
-## 仓库结构
+如果你想把默认下载目录换掉：
 
-```text
-src/hidetext/
-  candidate_policy.py
-  cli.py
-  codec.py
-  config.py
-  crypto.py
-  decoder.py
-  encoder.py
-  errors.py
-  llama_cpp_backend.py
-  model_backend.py
-  packet.py
-  pipeline.py
-  progress.py
-  quantization.py
-tests/
-  test_cli.py
-  test_codec_toy.py
-  test_crypto.py
-  test_failures.py
-  test_llama_cpp_integration.py
-  test_packet.py
-  test_quantization.py
-  test_roundtrip_en.py
-  test_roundtrip_zh.py
+```bash
+HIDETEXT_MODEL_DIR=/data/hidetext-models \
+.venv/bin/hidetext eval \
+  --show-progress \
+  --prompt 'Write a short paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Meet near the riverside at seven.'
 ```
 
-## 设计说明
+如果你想看结构化元数据输出：
 
-- packet 采用 `固定头 + 显式长度 body` 两阶段编码
-- 核心 codec 使用整数区间收缩，不依赖浮点比较
-- 解码器在秘密前缀内部遇到 prompt、seed、token 或配置漂移时都会 fail closed
-- packet 前缀恢复后，编码器可以继续追加不参与编解码的自然尾部，解码器会忽略它
-- 低熵重试属于发送端运行时安全策略，不属于共享解码 fingerprint
-- toy backend 适合快速验证协议；Qwen `llama.cpp` backend 对应真实本地 CPU 路径
+```bash
+.venv/bin/hidetext encode \
+  --json \
+  --show-progress \
+  --prompt 'Write a short paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Meet near the riverside at seven.'
+```
 
-更完整的协议细节见 [spec.md](spec.md)。CCS 风格的论文草稿见 [paper/ccs2026/main.tex](paper/ccs2026/main.tex)。
+## Toy backend
+
+`ToyCharBackend` 还在，但默认不是给普通使用者准备的，而是给测试和协议实验准备的：
+
+```bash
+.venv/bin/hidetext eval \
+  --backend toy \
+  --prompt 'Write a calm and readable English paragraph.' \
+  --passphrase test-pass \
+  --message 'toy backend roundtrip'
+```
+
+## 测试
+
+运行当前测试集：
+
+```bash
+env PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+真实模型 smoke test 仍然保持手动开启，因为它需要本地 GGUF：
+
+```bash
+HIDETEXT_LLAMA_MODEL_PATH=/abs/path/to/model.gguf \
+env PYTHONPATH=src python3 -m unittest tests.test_llama_cpp_integration -v
+```
+
+## 深入说明
+
+如果你想看协议级的设计和实现细节，请读 [spec.md](spec.md)。README 现在刻意偏向“先让使用者快速跑起来”。

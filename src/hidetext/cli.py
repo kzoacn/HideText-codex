@@ -8,7 +8,28 @@ import sys
 from .config import RuntimeConfig
 from .decoder import StegoDecoder
 from .encoder import StegoEncoder
+from .errors import ModelBackendError
 from .model_backend import ToyCharBackend
+from .model_assets import (
+    DEFAULT_BACKEND,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_BODY_TOKEN_BUDGET,
+    DEFAULT_CTX_SIZE,
+    DEFAULT_HEADER_TOKEN_BUDGET,
+    DEFAULT_LOW_ENTROPY_THRESHOLD_BITS,
+    DEFAULT_LOW_ENTROPY_WINDOW_TOKENS,
+    DEFAULT_MAX_CANDIDATES,
+    DEFAULT_MAX_ENCODE_ATTEMPTS,
+    DEFAULT_MIN_ENTROPY_BITS,
+    DEFAULT_MODEL_ID,
+    DEFAULT_NATURAL_TAIL_MAX_TOKENS,
+    DEFAULT_PROGRESS_TOKEN_INTERVAL,
+    DEFAULT_SEED,
+    DEFAULT_STALL_PATIENCE_TOKENS,
+    DEFAULT_TOP_P,
+    DEFAULT_TOTAL_FREQUENCY,
+    resolve_default_model_path,
+)
 from .progress import ProgressSnapshot
 
 
@@ -31,26 +52,70 @@ def _build_parser() -> argparse.ArgumentParser:
         seed_group.add_argument("--seed-file")
         subparser.add_argument(
             "--backend",
-            choices=("toy", "llama-cpp"),
-            default="toy",
+            choices=("llama-cpp", "toy"),
+            default=DEFAULT_BACKEND,
+            help="default is the real local llama.cpp backend; use toy only for tests",
         )
-        subparser.add_argument("--model-path")
+        subparser.add_argument(
+            "--model-path",
+            help="optional GGUF path; otherwise HideText reuses or downloads the default model",
+        )
+        subparser.add_argument(
+            "--model-id",
+            help="optional model identifier for protocol metadata; custom model paths infer this by default",
+        )
         subparser.add_argument("--threads", type=int)
-        subparser.add_argument("--ctx-size", type=int, default=4096)
-        subparser.add_argument("--batch-size", type=int, default=256)
-        subparser.add_argument("--top-p", type=float, default=0.97)
-        subparser.add_argument("--max-candidates", type=int, default=16)
-        subparser.add_argument("--min-entropy-bits", type=float, default=1.0)
-        subparser.add_argument("--totfreq", type=int, default=65536)
-        subparser.add_argument("--header-token-budget", type=int, default=1024)
-        subparser.add_argument("--body-token-budget", type=int, default=4096)
-        subparser.add_argument("--natural-tail-max-tokens", type=int, default=64)
-        subparser.add_argument("--stall-patience-tokens", type=int, default=256)
-        subparser.add_argument("--low-entropy-window-tokens", type=int, default=32)
-        subparser.add_argument("--low-entropy-threshold-bits", type=float, default=0.1)
-        subparser.add_argument("--max-encode-attempts", type=int, default=3)
+        subparser.add_argument("--ctx-size", type=int, default=DEFAULT_CTX_SIZE)
+        subparser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+        subparser.add_argument("--top-p", type=float, default=DEFAULT_TOP_P)
+        subparser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
+        subparser.add_argument(
+            "--min-entropy-bits",
+            type=float,
+            default=DEFAULT_MIN_ENTROPY_BITS,
+        )
+        subparser.add_argument("--totfreq", type=int, default=DEFAULT_TOTAL_FREQUENCY)
+        subparser.add_argument(
+            "--header-token-budget",
+            type=int,
+            default=DEFAULT_HEADER_TOKEN_BUDGET,
+        )
+        subparser.add_argument(
+            "--body-token-budget",
+            type=int,
+            default=DEFAULT_BODY_TOKEN_BUDGET,
+        )
+        subparser.add_argument(
+            "--natural-tail-max-tokens",
+            type=int,
+            default=DEFAULT_NATURAL_TAIL_MAX_TOKENS,
+        )
+        subparser.add_argument(
+            "--stall-patience-tokens",
+            type=int,
+            default=DEFAULT_STALL_PATIENCE_TOKENS,
+        )
+        subparser.add_argument(
+            "--low-entropy-window-tokens",
+            type=int,
+            default=DEFAULT_LOW_ENTROPY_WINDOW_TOKENS,
+        )
+        subparser.add_argument(
+            "--low-entropy-threshold-bits",
+            type=float,
+            default=DEFAULT_LOW_ENTROPY_THRESHOLD_BITS,
+        )
+        subparser.add_argument(
+            "--max-encode-attempts",
+            type=int,
+            default=DEFAULT_MAX_ENCODE_ATTEMPTS,
+        )
         subparser.add_argument("--show-progress", action="store_true")
-        subparser.add_argument("--progress-token-interval", type=int, default=50)
+        subparser.add_argument(
+            "--progress-token-interval",
+            type=int,
+            default=DEFAULT_PROGRESS_TOKEN_INTERVAL,
+        )
 
     encode_parser = subparsers.choices["encode"]
     encode_parser.add_argument("--message", required=True)
@@ -95,7 +160,7 @@ def _resolve_seed(args: argparse.Namespace) -> int:
     if args.seed is not None:
         return args.seed
     if args.seed_file is None:
-        return 7
+        return DEFAULT_SEED
     raw_text = _read_text_file(args.seed_file).strip()
     try:
         return int(raw_text)
@@ -150,13 +215,29 @@ def _build_backend(args: argparse.Namespace, *, seed: int):
     if args.backend == "toy":
         return ToyCharBackend()
     if args.backend == "llama-cpp":
+        try:
+            import llama_cpp  # noqa: F401
+        except ImportError as exc:
+            raise ModelBackendError(
+                "llama-cpp backend requires llama-cpp-python; install hidetext[llm]"
+            ) from exc
         if not args.model_path:
-            raise ValueError("--model-path is required when --backend llama-cpp is used")
+            resolved_model = resolve_default_model_path()
+        else:
+            resolved_model = resolve_default_model_path(args.model_path)
         from .llama_cpp_backend import LlamaCppBackendConfig, QwenLlamaCppBackend
 
+        if resolved_model.source == "downloaded":
+            print(
+                f"[hidetext] downloaded default model to {resolved_model.path}",
+                file=sys.stderr,
+                flush=True,
+            )
+        model_id = _resolve_model_id(args, resolved_model_source=resolved_model.source)
         return QwenLlamaCppBackend(
             LlamaCppBackendConfig(
-                model_path=args.model_path,
+                model_path=str(resolved_model.path),
+                model_id=model_id,
                 n_ctx=args.ctx_size,
                 n_batch=args.batch_size,
                 n_threads=args.threads,
@@ -166,15 +247,67 @@ def _build_backend(args: argparse.Namespace, *, seed: int):
     raise ValueError(f"unsupported backend: {args.backend}")
 
 
+def _resolve_model_id(args: argparse.Namespace, *, resolved_model_source: str) -> str | None:
+    if getattr(args, "model_id", None):
+        return args.model_id
+    if resolved_model_source in ("cache", "downloaded"):
+        return DEFAULT_MODEL_ID
+    return None
+
+
 def _build_progress_reporter(args: argparse.Namespace):
     if not args.show_progress:
         return None
 
     interval = max(1, args.progress_token_interval)
-    state = {"last_total_tokens": -1, "last_segment": None}
+    state = {
+        "last_total_tokens": -1,
+        "last_segment": None,
+        "last_phase": None,
+        "active_line": False,
+    }
+
+    def _format_clock(seconds: float | None) -> str:
+        if seconds is None:
+            return "??:??"
+        total = max(0, int(seconds))
+        minutes, sec = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+        return f"{minutes:02d}:{sec:02d}"
+
+    def _format_progress_line(snapshot: ProgressSnapshot) -> str:
+        if snapshot.segment_bits_total <= 0:
+            ratio = 1.0 if snapshot.finished else 0.0
+        else:
+            ratio = snapshot.segment_bits_done / float(snapshot.segment_bits_total)
+        ratio = min(1.0, max(0.0, ratio))
+        bar_width = 16
+        filled = int(ratio * bar_width)
+        bar = ("#" * filled) + ("-" * (bar_width - filled))
+        remaining_tokens = max(0, snapshot.token_budget - snapshot.segment_tokens)
+        eta_seconds = None
+        if snapshot.finished:
+            eta_seconds = 0.0
+        elif snapshot.tokens_per_second > 0.0:
+            eta_seconds = remaining_tokens / snapshot.tokens_per_second
+        overall_total = "?" if snapshot.overall_bits_total is None else str(snapshot.overall_bits_total)
+        return (
+            f"{snapshot.phase}/{snapshot.segment_name} "
+            f"{ratio * 100:6.2f}%|{bar}| "
+            f"{snapshot.segment_bits_done:.1f}/{snapshot.segment_bits_total}b "
+            f"[{_format_clock(snapshot.elapsed_seconds)}<{_format_clock(eta_seconds)}, "
+            f"{snapshot.tokens_per_second:.2f} tok/s, "
+            f"bpt {snapshot.bits_per_token:.3f}, tok {snapshot.total_tokens}, "
+            f"all {snapshot.overall_bits_done:.1f}/{overall_total}b]"
+        )
 
     def report(snapshot: ProgressSnapshot) -> None:
-        segment_changed = snapshot.segment_name != state["last_segment"]
+        segment_changed = (
+            snapshot.segment_name != state["last_segment"]
+            or snapshot.phase != state["last_phase"]
+        )
         should_print = snapshot.finished or segment_changed
         if state["last_total_tokens"] < 0:
             should_print = True
@@ -185,26 +318,17 @@ def _build_progress_reporter(args: argparse.Namespace):
 
         state["last_total_tokens"] = snapshot.total_tokens
         state["last_segment"] = snapshot.segment_name
-        overall_total = (
-            "?"
-            if snapshot.overall_bits_total is None
-            else str(snapshot.overall_bits_total)
-        )
-        status = "done" if snapshot.finished else "running"
-        print(
-            (
-                f"[{snapshot.phase}][{snapshot.segment_name}][{status}] "
-                f"bits={snapshot.overall_bits_done:.1f}/{overall_total} "
-                f"segment_bits={snapshot.segment_bits_done:.1f}/{snapshot.segment_bits_total} "
-                f"tokens={snapshot.total_tokens} "
-                f"segment_tokens={snapshot.segment_tokens}/{snapshot.token_budget} "
-                f"tps={snapshot.tokens_per_second:.2f} "
-                f"bpt={snapshot.bits_per_token:.3f} "
-                f"elapsed={snapshot.elapsed_seconds:.1f}s"
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+        state["last_phase"] = snapshot.phase
+
+        use_carriage = sys.stderr.isatty()
+        if use_carriage and segment_changed and state["active_line"]:
+            print(file=sys.stderr, flush=True)
+            state["active_line"] = False
+
+        line = _format_progress_line(snapshot)
+        end = "\r" if use_carriage and not snapshot.finished else "\n"
+        print(line, file=sys.stderr, end=end, flush=True)
+        state["active_line"] = bool(use_carriage and not snapshot.finished)
 
     return report
 
@@ -222,7 +346,7 @@ def main() -> None:
         seed = _resolve_seed(args)
         config = _config_from_args(args, seed=seed)
         backend = _build_backend(args, seed=seed)
-    except ValueError as exc:
+    except (ValueError, ModelBackendError) as exc:
         parser.error(str(exc))
     progress_reporter = _build_progress_reporter(args)
 

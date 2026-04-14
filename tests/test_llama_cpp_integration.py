@@ -5,6 +5,7 @@ from hidetext.config import CandidatePolicyConfig, CodecConfig, RuntimeConfig
 from hidetext.decoder import StegoDecoder
 from hidetext.encoder import StegoEncoder
 from hidetext.llama_cpp_backend import LlamaCppBackendConfig, QwenLlamaCppBackend
+from hidetext.model_assets import DEFAULT_BATCH_SIZE, DEFAULT_CTX_SIZE, DEFAULT_SEED
 
 
 MODEL_PATH = os.environ.get("HIDETEXT_LLAMA_MODEL_PATH")
@@ -14,12 +15,12 @@ MODEL_PATH = os.environ.get("HIDETEXT_LLAMA_MODEL_PATH")
 class LlamaCppIntegrationTests(unittest.TestCase):
     def test_qwen_roundtrip_smoke(self) -> None:
         assert MODEL_PATH is not None
-        seed = int(os.environ.get("HIDETEXT_LLAMA_SEED", "7"))
+        seed = int(os.environ.get("HIDETEXT_LLAMA_SEED", str(DEFAULT_SEED)))
         backend = QwenLlamaCppBackend(
             LlamaCppBackendConfig(
                 model_path=MODEL_PATH,
-                n_ctx=int(os.environ.get("HIDETEXT_LLAMA_CTX", "4096")),
-                n_batch=int(os.environ.get("HIDETEXT_LLAMA_BATCH", "256")),
+                n_ctx=int(os.environ.get("HIDETEXT_LLAMA_CTX", str(DEFAULT_CTX_SIZE))),
+                n_batch=int(os.environ.get("HIDETEXT_LLAMA_BATCH", str(DEFAULT_BATCH_SIZE))),
                 n_threads=int(os.environ.get("HIDETEXT_LLAMA_THREADS", "8")),
                 seed=seed,
             )
