@@ -4,8 +4,6 @@
 
 Ghostext is a text steganography demo. It encrypts your message first, then hides the ciphertext inside language-model token choices so the same model, prompt, passphrase, and seed can recover it later.
 
-The default user path is now the real local `llama.cpp` backend.
-
 ## Quick start
 
 Install from PyPI with local-LLM support:
@@ -20,7 +18,7 @@ Run a quick encode/decode round-trip check:
 ghostext encode \
   --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message 'Attack at Dawn!' \
 | ghostext decode \
   --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
   --passphrase demo-pass
@@ -63,7 +61,7 @@ ghostext encode \
 ghostext encode \
   --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message 'Attack at Dawn!' \
 | ghostext decode \
   --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
   --passphrase demo-pass
@@ -75,7 +73,7 @@ If you want to keep the generated text:
 ghostext encode \
   --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message 'Attack at Dawn!' \
   > stego.txt
 
 ghostext decode \
@@ -118,7 +116,7 @@ ghostext encode \
   --model-path /abs/path/to/model.gguf \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message 'Attack at Dawn!' \
 | ghostext decode \
   --model-path /abs/path/to/model.gguf \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
@@ -132,7 +130,7 @@ GHOSTEXT_MODEL_DIR=/data/ghostext-models \
 ghostext encode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message 'Attack at Dawn!' \
 | GHOSTEXT_MODEL_DIR=/data/ghostext-models \
   ghostext decode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
@@ -146,7 +144,7 @@ ghostext encode \
   --json \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.'
+  --message 'Attack at Dawn!'
 ```
 
 Disable logs when you want fully quiet output:
@@ -156,7 +154,7 @@ ghostext encode \
   --quiet \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
-  --message 'Meet near the riverside at seven.'
+  --message 'Attack at Dawn!'
 ```
 
 ## More detail
