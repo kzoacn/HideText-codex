@@ -3,6 +3,9 @@
 [中文说明 / Chinese README](README.zh-CN.md)
 
 Ghostext is a text steganography demo. It encrypts your message first, then hides the ciphertext inside language-model token choices so the same model, prompt, passphrase, and seed can recover it later.
+ 
+![Ghostext demo](imgs/demo.png)
+
 
 ## Quick start
 
