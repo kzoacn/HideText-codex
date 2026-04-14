@@ -30,5 +30,9 @@ class StallDetectedError(HideTextError):
     """Raised when encoding stops making forward bit progress for too long."""
 
 
+class LowEntropyRetryLimitError(HideTextError):
+    """Raised when repeated encoding attempts all fall into a low-entropy regime."""
+
+
 class ModelBackendError(HideTextError):
     """Raised when the backend cannot provide or parse tokens."""

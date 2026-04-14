@@ -338,6 +338,17 @@ magic[4] | version[1] | flags[1] | kdf_id[1] | aead_id[1] | salt_len[1] | nonce_
 - `stall_patience_tokens` 是发送端本地运行时安全参数，不进入 packet 指纹
 - 这样可以更早发现真实模型掉进低熵循环或候选集坍缩
 
+当前实现还加入了 `low-entropy retry detector`：
+
+- 发送端会监测最近一段连续 token step 的候选集熵
+- 如果滚动窗口内的平均熵持续低于阈值，例如 `< 0.1 bit`
+- 就说明模型进入了几乎无法承载信息的低熵区域
+- 此时发送端应放弃当前编码尝试，并用新的随机 `salt / nonce` 重新构造 packet 后重试
+- 如果达到最大尝试次数后仍然失败，应显式报错，并建议更换 prompt 或减少消息长度
+- `low_entropy_window_tokens`、`low_entropy_threshold_bits` 和 `max_encode_attempts` 都属于发送端本地运行时安全参数，不进入 packet 指纹
+- 当 `low_entropy_window_tokens <= 0` 时，可显式关闭这个 detector，用于固定 packet 的受控实验
+- 这样可以比单纯等待 stall detector 更早发现“候选集虽然还在变化，但平均信息量已经接近 0 bit”的路径
+
 ## 16. 推荐默认参数
 
 这些参数是建议值，不是强制常数：
@@ -349,6 +360,9 @@ max_candidates = 32 或 64
 min_entropy_bits = 1.0 ~ 1.5
 totfreq = 65536
 range_precision_bits = 64
+low_entropy_window_tokens = 32
+low_entropy_threshold_bits = 0.1
+max_encode_attempts = 3
 ```
 
 设计原则：
@@ -370,6 +384,7 @@ range_precision_bits = 64
 8. 输出文本被额外改动
 9. 解码得到的 packet 无法通过 AEAD 校验
 10. 真实模型进入长时间零容量 stall
+11. 真实模型进入持续低熵区，连续多个 token 的平均熵接近 0，导致同一次 packet 路径无法完成编码
 
 默认处理方式：
 
@@ -428,6 +443,8 @@ range_precision_bits = 64
 - 故意换 prompt
 - 故意换模型
 - 故意改一处 token
+- 构造连续低熵窗口，验证发送端会自动重试
+- 构造连续低熵且重试次数耗尽，验证会明确失败并给出建议
 
 应观察到：
 

@@ -1,12 +1,66 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from hidetext.config import CodecConfig, RuntimeConfig
+from hidetext.config import CandidatePolicyConfig, CodecConfig, RuntimeConfig
 from hidetext.decoder import StegoDecoder
 from hidetext.encoder import StegoEncoder
-from hidetext.errors import HideTextError, StallDetectedError
+from hidetext.errors import HideTextError, LowEntropyRetryLimitError, StallDetectedError
 from hidetext.model_backend import BackendMetadata, RawNextTokenDistribution, ToyCharBackend
+from hidetext.packet import HEADER_SIZE
+
+
+class RetrySensitiveBackend:
+    def __init__(self) -> None:
+        self._metadata = BackendMetadata(
+            model_id="retry-sensitive-backend",
+            tokenizer_hash="retry-sensitive-hash",
+            backend_id="retry-sensitive",
+        )
+        self._header_tokens = HEADER_SIZE * 8
+
+    @property
+    def metadata(self) -> BackendMetadata:
+        return self._metadata
+
+    def tokenize(self, text: str, prompt: str) -> list[int]:
+        del prompt
+        return [0 if ch == "a" else 1 for ch in text]
+
+    def render(self, token_ids: list[int]) -> str:
+        return "".join("a" if token_id == 0 else "b" for token_id in token_ids)
+
+    def token_text(self, token_id: int) -> str:
+        return "a" if token_id == 0 else "b"
+
+    def distribution(
+        self,
+        prompt: str,
+        generated_token_ids: list[int],
+        seed: int,
+    ) -> RawNextTokenDistribution:
+        del prompt, seed
+        if len(generated_token_ids) < self._header_tokens:
+            return RawNextTokenDistribution(
+                token_ids=np.asarray([0, 1], dtype=np.int32),
+                logits=np.asarray([0.0, 0.0], dtype=np.float64),
+            )
+        if len(generated_token_ids) == self._header_tokens:
+            return RawNextTokenDistribution(
+                token_ids=np.asarray([0, 1], dtype=np.int32),
+                logits=np.asarray([0.0, 0.0], dtype=np.float64),
+            )
+        first_body_token_id = generated_token_ids[self._header_tokens]
+        if first_body_token_id == 0:
+            return RawNextTokenDistribution(
+                token_ids=np.asarray([0], dtype=np.int32),
+                logits=np.asarray([0.0], dtype=np.float64),
+            )
+        return RawNextTokenDistribution(
+            token_ids=np.asarray([0, 1], dtype=np.int32),
+            logits=np.asarray([0.0, 0.0], dtype=np.float64),
+        )
 
 
 class FailureTests(unittest.TestCase):
@@ -131,6 +185,75 @@ class FailureTests(unittest.TestCase):
             prompt=self.prompt,
         )
         self.assertEqual(decoded.plaintext, self.message)
+
+    def test_low_entropy_attempt_retries_with_fresh_packet(self) -> None:
+        backend = RetrySensitiveBackend()
+        config = RuntimeConfig(
+            seed=7,
+            candidate_policy=CandidatePolicyConfig(
+                top_p=1.0,
+                max_candidates=2,
+                min_entropy_bits=0.0,
+            ),
+            codec=CodecConfig(
+                total_frequency=2,
+                max_header_tokens=HEADER_SIZE * 8,
+                max_body_tokens=32,
+                stall_patience_tokens=0,
+                low_entropy_window_tokens=4,
+                low_entropy_threshold_bits=0.1,
+                max_encode_attempts=3,
+            ),
+        )
+        first_packet = (b"H" * HEADER_SIZE) + b"\x00"
+        second_packet = (b"H" * HEADER_SIZE) + b"\x80"
+        with mock.patch(
+            "hidetext.encoder.build_packet",
+            side_effect=[first_packet, second_packet],
+        ) as build_packet_mock:
+            result = StegoEncoder(backend, config).encode(
+                "retry me",
+                passphrase="hunter2",
+                prompt="test prompt",
+            )
+
+        self.assertEqual(build_packet_mock.call_count, 2)
+        self.assertEqual(result.attempts_used, 2)
+        self.assertGreater(result.total_tokens, HEADER_SIZE * 8)
+
+    def test_low_entropy_retry_limit_reports_actionable_error(self) -> None:
+        backend = RetrySensitiveBackend()
+        config = RuntimeConfig(
+            seed=7,
+            candidate_policy=CandidatePolicyConfig(
+                top_p=1.0,
+                max_candidates=2,
+                min_entropy_bits=0.0,
+            ),
+            codec=CodecConfig(
+                total_frequency=2,
+                max_header_tokens=HEADER_SIZE * 8,
+                max_body_tokens=32,
+                stall_patience_tokens=0,
+                low_entropy_window_tokens=4,
+                low_entropy_threshold_bits=0.1,
+                max_encode_attempts=3,
+            ),
+        )
+        failing_packet = (b"H" * HEADER_SIZE) + b"\x00"
+        with mock.patch(
+            "hidetext.encoder.build_packet",
+            side_effect=[failing_packet, failing_packet, failing_packet],
+        ) as build_packet_mock:
+            with self.assertRaises(LowEntropyRetryLimitError) as ctx:
+                StegoEncoder(backend, config).encode(
+                    "retry me",
+                    passphrase="hunter2",
+                    prompt="test prompt",
+                )
+
+        self.assertEqual(build_packet_mock.call_count, 3)
+        self.assertIn("Try a different prompt or reduce the message length.", str(ctx.exception))
 
 
 if __name__ == "__main__":

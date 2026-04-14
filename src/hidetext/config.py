@@ -31,6 +31,9 @@ class CodecConfig:
     max_header_tokens: int = 1024
     max_body_tokens: int = 4096
     stall_patience_tokens: int = 256
+    low_entropy_window_tokens: int = 32
+    low_entropy_threshold_bits: float = 0.1
+    max_encode_attempts: int = 3
 
     def as_protocol_dict(self) -> dict[str, object]:
         return {

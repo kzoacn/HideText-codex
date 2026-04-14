@@ -130,8 +130,15 @@ class CliTests(unittest.TestCase):
             "11",
             "--stall-patience-tokens",
             "64",
+            "--low-entropy-window-tokens",
+            "16",
+            "--low-entropy-threshold-bits",
+            "0.1",
+            "--max-encode-attempts",
+            "3",
         )
         self.assertIn("text", payload)
+        self.assertIn("attempts_used", payload)
 
 
 if __name__ == "__main__":

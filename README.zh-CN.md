@@ -1,26 +1,26 @@
-# HideText-codex
+# HideText-codex 中文说明
 
-[中文说明 / Chinese README](README.zh-CN.md)
+[English README](README.md)
 
-HideText is a deterministic text steganography demo that hides an encrypted payload inside next-token choices during language-model generation. Instead of editing a finished paragraph, the sender maps ciphertext bits into token selections under a shared model, tokenizer, prompt, seed, and codec configuration; the receiver then replays the same distributions to recover the payload.
+HideText 是一个确定性的文本隐写 demo：它不是先生成自然语言再做后处理，而是直接把加密后的秘密载荷映射到语言模型每一步的 next-token 选择里。在发送端和接收端共享同一模型、tokenizer、prompt、seed 和 codec 配置的前提下，接收端可以镜像重放这些分布并恢复明文。
 
-The project is intentionally optimized for reproducibility and decodability before naturalness and capacity.
+这个仓库优先保证的是可复现和可解码，然后才是自然度与容量。
 
-## What is implemented
+## 已实现能力
 
-- fixed packet framing with a runtime config fingerprint
-- `scrypt + ChaCha20-Poly1305` encrypt-then-stego payload construction
-- deterministic candidate selection and integer probability quantization
-- an integer finite-interval header/body codec
-- a bilingual deterministic toy backend for fast protocol tests
-- a `llama.cpp` backend for local Qwen GGUF inference on CPU
-- CLI commands for `encode`, `decode`, and `eval`
-- fail-closed negative tests for prompt drift, seed drift, text mutation, and retry exhaustion
-- low-entropy monitoring with automatic re-attempts
+- 带运行时配置指纹的固定 packet framing
+- `scrypt + ChaCha20-Poly1305` 的 encrypt-then-stego 载荷构造
+- 确定性的候选集裁剪与整数频数量化
+- 整数 finite-interval header/body codec
+- 用于快速协议验证的双语 toy backend
+- 基于 `llama.cpp` 的本地 Qwen GGUF CPU 后端
+- `encode` / `decode` / `eval` CLI
+- 对 prompt 漂移、seed 漂移、文本改动、重试耗尽的 fail-closed 测试
+- 低熵监测与自动重试
 
-## Quick start
+## 快速开始
 
-Create a local environment and install the base package:
+创建本地虚拟环境并安装基础依赖：
 
 ```bash
 python3 -m venv .venv
@@ -29,21 +29,21 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-Run the default test suite:
+运行默认测试：
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-## Real-model setup
+## 真实模型环境
 
-Install the optional local-LLM dependencies:
+安装可选的本地 LLM 依赖：
 
 ```bash
 .venv/bin/python -m pip install -e '.[llm]'
 ```
 
-Download the verified GGUF model:
+下载当前验证过的 GGUF 模型：
 
 ```bash
 .venv/bin/python - <<'PY'
@@ -58,7 +58,7 @@ print(path)
 PY
 ```
 
-Run the real integration smoke test:
+运行真实模型 smoke test：
 
 ```bash
 HIDETEXT_LLAMA_MODEL_PATH=/abs/path/to/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
@@ -68,32 +68,32 @@ HIDETEXT_LLAMA_BATCH=128 \
 .venv/bin/python -m unittest tests.test_llama_cpp_integration -v
 ```
 
-The repository was validated locally with:
+当前仓库已经在本地完成过：
 
-- the default `unittest` suite over the toy backend
-- a real CPU smoke test using `Qwen/Qwen3-4B-Instruct-2507` in GGUF `Q4_K_M` form
+- toy backend 的完整默认测试
+- `Qwen/Qwen3-4B-Instruct-2507` GGUF `Q4_K_M` 的 CPU round-trip smoke test
 
-## Low-entropy retry behavior
+## 低熵自动重试
 
-Encoding can fail when the model collapses into a near-deterministic region and the candidate entropy effectively drops to zero. HideText now guards against this by default:
+当模型进入近乎确定性的低熵区域时，候选集会退化到几乎无法承载信息，极端情况下只有一个 token，消息就可能编码不进去。HideText 现在默认会这样处理：
 
-- it monitors a rolling window of `32` consecutive token steps
-- if the average candidate entropy over that window falls below `0.1` bit, the current encoding attempt is abandoned
-- a fresh attempt is started with a new random packet salt/nonce, which changes the encrypted body and therefore the token path
-- after `3` failed attempts, HideText raises an explicit error suggesting a different cover prompt or a shorter secret
+- 监测连续 `32` 个 token step 的滚动窗口
+- 如果这个窗口上的平均候选熵低于 `0.1` bit，就放弃当前尝试
+- 用新的随机 salt / nonce 重新生成 packet，再做一次编码
+- 如果连续 `3` 次都失败，就显式报错，并建议更换 cover prompt 或减少消息长度
 
-These knobs are sender-side runtime safety settings and do not enter the packet fingerprint:
+这些参数都是发送端本地运行时安全策略，不进入 packet fingerprint：
 
 - `--low-entropy-window-tokens`
 - `--low-entropy-threshold-bits`
 - `--max-encode-attempts`
 - `--stall-patience-tokens`
 
-Set `--low-entropy-window-tokens 0` to disable the low-entropy detector for controlled experiments with a fixed packet.
+如果你在做固定 packet 的受控实验，可以传 `--low-entropy-window-tokens 0` 显式关闭这个 detector。
 
-## CLI usage
+## CLI 用法
 
-Toy backend round-trip:
+toy backend round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
@@ -103,7 +103,7 @@ Toy backend round-trip:
   --seed 29
 ```
 
-Real Qwen CPU round-trip:
+真实 Qwen CPU round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
@@ -122,13 +122,13 @@ Real Qwen CPU round-trip:
   --low-entropy-window-tokens 32 \
   --low-entropy-threshold-bits 0.1 \
   --max-encode-attempts 3 \
-  --prompt 'Please write a short, natural paragraph about a quiet evening walk.' \
+  --prompt '请写一段自然、简短、连贯的中文段落，描写傍晚散步时看到的街景。' \
   --passphrase real-pass \
-  --message 'Meet near the riverside at seven.' \
+  --message '今晚七点在河边老地方见。' \
   --seed 7
 ```
 
-If you want file-based inputs:
+如果希望从文件读取输入：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
@@ -138,9 +138,9 @@ If you want file-based inputs:
   --message '今晚七点在老地方见。'
 ```
 
-## Examples
+## 示例
 
-### English example
+### 英文示例
 
 - Backend: `toy`
 - Prompt / cover prompt: `Write a calm and readable English paragraph about a quiet evening walk.`
@@ -148,7 +148,7 @@ If you want file-based inputs:
 - Passphrase: `demo-en`
 - Seed: `29`
 
-Command:
+命令：
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
@@ -158,13 +158,13 @@ Command:
   --seed 29
 ```
 
-Stego text excerpt:
+隐写文本片段：
 
 ```text
 The afternoon feels cllm, and the corner cafe keeps a warm light on while people talk softlv along the street. A quiet breeze moves past the window, the pages stay hflf open on tte table, and the room keeps a steady brightness.
 ```
 
-### Chinese example
+### 中文示例
 
 - Backend: `toy`
 - Prompt / cover prompt: `请写一段自然、柔和、连贯的中文短文，描写傍晚散步时看到的街景。`
@@ -172,7 +172,7 @@ The afternoon feels cllm, and the corner cafe keeps a warm light on while people
 - Passphrase: `demo-zh`
 - Seed: `17`
 
-Command:
+命令：
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
@@ -182,13 +182,13 @@ Command:
   --seed 17
 ```
 
-Stego text excerpt:
+隐写文本片段：
 
 ```text
 今天的风很轻，街角的咖啡店还亮着暖黄的静，路过的人慢慢聊着天，城天显得安静而柔和。午后的窗边有一轻淡淡香茶的，桌上书书翻到一半，雨声落在树叶上，房间里有种稳稳的明亮。
 ```
 
-## Repository layout
+## 仓库结构
 
 ```text
 src/hidetext/
@@ -218,12 +218,12 @@ tests/
   test_roundtrip_zh.py
 ```
 
-## Design notes
+## 设计说明
 
-- The packet is encoded as `fixed-size header + explicit-length body`.
-- The core codec uses integer interval refinement instead of floating-point comparisons.
-- The decoder fails closed on prompt drift, seed drift, token drift, or config mismatch.
-- Retry-on-low-entropy is operational safety logic for the sender, not part of the shared decode fingerprint.
-- The toy backend is the fastest way to validate protocol behavior; the Qwen `llama.cpp` backend is the realistic local CPU path.
+- packet 采用 `固定头 + 显式长度 body` 两阶段编码
+- 核心 codec 使用整数区间收缩，不依赖浮点比较
+- 解码器在 prompt、seed、token 或配置漂移时都会 fail closed
+- 低熵重试属于发送端运行时安全策略，不属于共享解码 fingerprint
+- toy backend 适合快速验证协议；Qwen `llama.cpp` backend 对应真实本地 CPU 路径
 
-More protocol details are in [spec.md](spec.md). A CCS-style paper draft is in [paper/ccs2026/main.tex](paper/ccs2026/main.tex).
+更完整的协议细节见 [spec.md](spec.md)。CCS 风格的论文草稿见 [paper/ccs2026/main.tex](paper/ccs2026/main.tex)。

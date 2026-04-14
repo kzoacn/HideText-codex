@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from .codec import MessageSegmentEncoder
 from .config import RuntimeConfig
 from .crypto import build_packet
-from .errors import EncodingExhaustedError, StallDetectedError
+from .errors import EncodingExhaustedError, LowEntropyRetryLimitError, StallDetectedError
 from .model_backend import TextBackend
 from .packet import HEADER_SIZE
 from .pipeline import prepare_quantized_distribution
@@ -30,6 +31,7 @@ class EncodeResult:
     packet: bytes
     config_fingerprint: int
     segment_stats: tuple[SegmentStats, ...]
+    attempts_used: int
     elapsed_seconds: float
 
     @property
@@ -47,6 +49,35 @@ class EncodeResult:
         if self.elapsed_seconds <= 0.0:
             return 0.0
         return self.total_tokens / self.elapsed_seconds
+
+
+@dataclass
+class _LowEntropyWindow:
+    window_tokens: int
+    threshold_bits: float
+    values: deque[float] = field(default_factory=deque)
+    total_entropy_bits: float = 0.0
+
+    def observe(self, entropy_bits: float) -> float | None:
+        if self.window_tokens <= 0:
+            return None
+        self.values.append(entropy_bits)
+        self.total_entropy_bits += entropy_bits
+        if len(self.values) > self.window_tokens:
+            self.total_entropy_bits -= self.values.popleft()
+        if len(self.values) < self.window_tokens:
+            return None
+        average_entropy_bits = self.total_entropy_bits / self.window_tokens
+        if average_entropy_bits < self.threshold_bits:
+            return average_entropy_bits
+        return None
+
+
+class _LowEntropyWindowTriggered(Exception):
+    def __init__(self, *, segment_name: str, average_entropy_bits: float) -> None:
+        super().__init__(segment_name, average_entropy_bits)
+        self.segment_name = segment_name
+        self.average_entropy_bits = average_entropy_bits
 
 
 class StegoEncoder:
@@ -70,19 +101,72 @@ class StegoEncoder:
             backend_metadata=self.backend.metadata.as_dict(),
             prompt=prompt,
         )
-        packet = build_packet(
-            plaintext_bytes,
-            passphrase=passphrase,
-            config_fingerprint=config_fingerprint,
-            crypto_config=self.config.crypto,
-            salt=salt,
-            nonce=nonce,
-        )
+        attempts_allowed = max(1, self.config.codec.max_encode_attempts)
+        can_retry = salt is None or nonce is None
+        if not can_retry:
+            attempts_allowed = 1
 
+        for attempt_index in range(attempts_allowed):
+            packet = build_packet(
+                plaintext_bytes,
+                passphrase=passphrase,
+                config_fingerprint=config_fingerprint,
+                crypto_config=self.config.crypto,
+                salt=salt,
+                nonce=nonce,
+            )
+            try:
+                token_ids, stats = self._encode_packet(
+                    packet=packet,
+                    prompt=prompt,
+                    start_time=start_time,
+                    progress_callback=progress_callback,
+                )
+            except _LowEntropyWindowTriggered as exc:
+                if attempt_index + 1 < attempts_allowed:
+                    continue
+                retry_hint = "Try a different prompt or reduce the message length."
+                if not can_retry:
+                    retry_hint = (
+                        "Automatic retry is disabled when both salt and nonce are fixed. "
+                        + retry_hint
+                    )
+                raise LowEntropyRetryLimitError(
+                    "encoding entered a low-entropy regime: "
+                    f"{exc.segment_name} rolling average entropy stayed at "
+                    f"{exc.average_entropy_bits:.3f} bits over "
+                    f"{self.config.codec.low_entropy_window_tokens} consecutive tokens "
+                    f"across {attempt_index + 1} attempt(s). {retry_hint}"
+                ) from exc
+
+            return EncodeResult(
+                text=self.backend.render(token_ids),
+                token_ids=tuple(token_ids),
+                packet=packet,
+                config_fingerprint=config_fingerprint,
+                segment_stats=tuple(stats),
+                attempts_used=attempt_index + 1,
+                elapsed_seconds=perf_counter() - start_time,
+            )
+
+        raise AssertionError("encoding attempts loop exited unexpectedly")
+
+    def _encode_packet(
+        self,
+        *,
+        packet: bytes,
+        prompt: str,
+        start_time: float,
+        progress_callback: ProgressCallback | None,
+    ) -> tuple[list[int], list[SegmentStats]]:
         token_ids: list[int] = []
         stats: list[SegmentStats] = []
         total_bits = len(packet) * 8
         completed_bits = 0.0
+        low_entropy_window = _LowEntropyWindow(
+            window_tokens=self.config.codec.low_entropy_window_tokens,
+            threshold_bits=self.config.codec.low_entropy_threshold_bits,
+        )
 
         header_stats = self._encode_segment(
             segment_name="header",
@@ -94,6 +178,7 @@ class StegoEncoder:
             overall_bits_total=total_bits,
             start_time=start_time,
             progress_callback=progress_callback,
+            low_entropy_window=low_entropy_window,
         )
         stats.append(header_stats)
         completed_bits += len(packet[:HEADER_SIZE]) * 8
@@ -108,17 +193,10 @@ class StegoEncoder:
             overall_bits_total=total_bits,
             start_time=start_time,
             progress_callback=progress_callback,
+            low_entropy_window=low_entropy_window,
         )
         stats.append(body_stats)
-
-        return EncodeResult(
-            text=self.backend.render(token_ids),
-            token_ids=tuple(token_ids),
-            packet=packet,
-            config_fingerprint=config_fingerprint,
-            segment_stats=tuple(stats),
-            elapsed_seconds=perf_counter() - start_time,
-        )
+        return token_ids, stats
 
     def _encode_segment(
         self,
@@ -132,6 +210,7 @@ class StegoEncoder:
         overall_bits_total: int,
         start_time: float,
         progress_callback: ProgressCallback | None,
+        low_entropy_window: _LowEntropyWindow,
     ) -> SegmentStats:
         encoder = MessageSegmentEncoder(payload)
         steps = 0
@@ -150,6 +229,12 @@ class StegoEncoder:
                 generated_token_ids=generated_token_ids,
                 config=self.config,
             )
+            low_entropy_average = low_entropy_window.observe(quantized.entropy_bits)
+            if low_entropy_average is not None:
+                raise _LowEntropyWindowTriggered(
+                    segment_name=segment_name,
+                    average_entropy_bits=low_entropy_average,
+                )
             if quantized.allows_encoding:
                 index, gained_bits = encoder.choose(quantized)
                 chosen_token_id = quantized.entries[index].token_id
