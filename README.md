@@ -4,17 +4,14 @@
 
 Ghostext is a deterministic text steganography demo. It encrypts your message first, then hides the ciphertext inside language-model token choices so the same model, prompt, passphrase, and seed can recover it later.
 
-The default user path is now the real local `llama.cpp` backend. The toy backend still exists, but it is meant for tests and protocol debugging.
+The default user path is now the real local `llama.cpp` backend.
 
 ## Quick start
 
 Install from PyPI with local-LLM support:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install 'ghostext[llm]'
+pip install ghostext[llm]
 ```
 
 Run a quick encode/decode round-trip check:
@@ -160,43 +157,6 @@ ghostext encode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
   --message 'Meet near the riverside at seven.'
-```
-
-## Toy backend
-
-`ToyCharBackend` is still available, but it is for tests and protocol experiments rather than normal use:
-
-```bash
-ghostext encode \
-  --backend toy \
-  --prompt 'Write a calm and readable English paragraph.' \
-  --passphrase test-pass \
-  --message 'toy backend roundtrip' \
-| ghostext decode \
-  --backend toy \
-  --prompt 'Write a calm and readable English paragraph.' \
-  --passphrase test-pass
-```
-
-## Tests
-
-If you are contributing from source, install dev dependencies first:
-
-```bash
-python -m pip install -e '.[llm]'
-```
-
-Then run the current test suite with:
-
-```bash
-env PYTHONPATH=src python -m unittest discover -s tests -v
-```
-
-The real-model smoke test stays opt-in because it needs a local GGUF model:
-
-```bash
-GHOSTEXT_LLAMA_MODEL_PATH=/abs/path/to/model.gguf \
-env PYTHONPATH=src python -m unittest tests.test_llama_cpp_integration -v
 ```
 
 ## More detail

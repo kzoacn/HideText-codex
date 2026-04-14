@@ -4,17 +4,14 @@
 
 Ghostext 是一个确定性的文本隐写 demo。它会先加密消息，再把密文映射到语言模型生成时的 token 选择里；只要发送端和接收端共享同一模型、prompt、口令和 seed，就可以把消息恢复出来。
 
-现在默认的用户路径已经切到真实本地 `llama.cpp` 后端。`toy` backend 仍然保留，但主要用于测试和协议调试。
+现在默认的用户路径已经切到真实本地 `llama.cpp` 后端。
 
 ## 快速开始
 
 先用 PyPI 安装带本地 LLM 支持的版本：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install 'ghostext[llm]'
+pip install ghostext[llm]
 ```
 
 用一条命令先跑通一次 encode/decode round-trip：
@@ -160,43 +157,6 @@ ghostext encode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
   --message 'Meet near the riverside at seven.'
-```
-
-## Toy backend
-
-`ToyCharBackend` 还在，但默认不是给普通使用者准备的，而是给测试和协议实验准备的：
-
-```bash
-ghostext encode \
-  --backend toy \
-  --prompt 'Write a calm and readable English paragraph.' \
-  --passphrase test-pass \
-  --message 'toy backend roundtrip' \
-| ghostext decode \
-  --backend toy \
-  --prompt 'Write a calm and readable English paragraph.' \
-  --passphrase test-pass
-```
-
-## 测试
-
-如果你是从源码参与开发，请先安装开发依赖：
-
-```bash
-python -m pip install -e '.[llm]'
-```
-
-然后运行当前测试集：
-
-```bash
-env PYTHONPATH=src python -m unittest discover -s tests -v
-```
-
-真实模型 smoke test 仍然保持手动开启，因为它需要本地 GGUF：
-
-```bash
-GHOSTEXT_LLAMA_MODEL_PATH=/abs/path/to/model.gguf \
-env PYTHONPATH=src python -m unittest tests.test_llama_cpp_integration -v
 ```
 
 ## 深入说明
