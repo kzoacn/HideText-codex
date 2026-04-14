@@ -128,6 +128,7 @@ toy backend round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --prompt 'Write a calm and readable English paragraph.' \
   --passphrase pass-en \
   --message 'Meet me near the station at seven.' \
@@ -138,6 +139,7 @@ toy backend round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --backend llama-cpp \
   --model-path models/qwen3-4b-q4km/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
   --threads 8 \
@@ -164,10 +166,29 @@ toy backend round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --prompt-file prompts/zh.txt \
   --passphrase-file secrets/passphrase.txt \
   --seed-file secrets/seed.txt \
   --message '今晚七点在老地方见。'
+```
+
+现在 `encode` 默认只输出隐写文本，`decode` 默认只输出恢复出的明文；如果想看之前那种详细元数据输出，可以在任一命令后面加 `--json`。
+
+这样就可以直接走 shell 管道：
+
+```bash
+.venv/bin/python -m hidetext.cli encode \
+  --show-progress \
+  --prompt '请写一段温柔自然的中文短文。' \
+  --passphrase pipe-pass \
+  --message '今晚七点在老地方见。' \
+  --seed 17 \
+| .venv/bin/python -m hidetext.cli decode \
+  --show-progress \
+  --prompt '请写一段温柔自然的中文短文。' \
+  --passphrase pipe-pass \
+  --seed 17
 ```
 
 ## 示例
@@ -184,6 +205,7 @@ toy backend round-trip：
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
+  --show-progress \
   --prompt 'Write a calm and readable English paragraph about a quiet evening walk.' \
   --passphrase demo-en \
   --message 'Meet near the riverside at seven.' \
@@ -208,6 +230,7 @@ The afternoon feels cllm, and the corner cafe keeps a warm light on while people
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
+  --show-progress \
   --prompt '请写一段自然、柔和、连贯的中文短文，描写傍晚散步时看到的街景。' \
   --passphrase demo-zh \
   --message '今晚七点在河边老地方见。' \

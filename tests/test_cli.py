@@ -11,7 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
-    def _run_completed(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def _run_completed(
+        self,
+        *args: str,
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(REPO_ROOT / "src")
         return subprocess.run(
@@ -21,6 +25,7 @@ class CliTests(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
+            input=input_text,
         )
 
     def _run(self, *args: str) -> dict[str, object]:
@@ -32,7 +37,7 @@ class CliTests(unittest.TestCase):
         passphrase = "cli-pass"
         message = "CLI roundtrip works."
 
-        encoded = self._run(
+        encoded = self._run_completed(
             "encode",
             "--prompt",
             prompt,
@@ -43,21 +48,19 @@ class CliTests(unittest.TestCase):
             "--seed",
             "11",
         )
-        decoded = self._run(
+        self.assertTrue(encoded.stdout)
+        self.assertFalse(encoded.stdout.startswith("{"))
+        decoded = self._run_completed(
             "decode",
             "--prompt",
             prompt,
             "--passphrase",
             passphrase,
-            "--text",
-            str(encoded["text"]),
             "--seed",
             "11",
+            input_text=encoded.stdout,
         )
-        self.assertEqual(decoded["plaintext"], message)
-        self.assertIn("packet_tokens", encoded)
-        self.assertIn("tail_tokens", encoded)
-        self.assertIn("trailing_tokens", decoded)
+        self.assertEqual(decoded.stdout, message)
 
     def test_encode_then_decode_with_files(self) -> None:
         prompt = "请写一段温柔自然的中文短文。"
@@ -76,6 +79,7 @@ class CliTests(unittest.TestCase):
 
             encoded = self._run(
                 "encode",
+                "--json",
                 "--prompt-file",
                 str(prompt_path),
                 "--passphrase-file",
@@ -87,6 +91,7 @@ class CliTests(unittest.TestCase):
             )
             decoded = self._run(
                 "decode",
+                "--json",
                 "--prompt-file",
                 str(prompt_path),
                 "--passphrase-file",
@@ -99,6 +104,41 @@ class CliTests(unittest.TestCase):
             self.assertEqual(decoded["plaintext"], message)
             self.assertIn("tail_tokens", encoded)
             self.assertIn("trailing_tokens", decoded)
+
+    def test_encode_and_decode_json_flag_preserves_detailed_output(self) -> None:
+        prompt = "Write a calm and readable English paragraph."
+        passphrase = "cli-json-pass"
+        message = "CLI json mode works."
+
+        encoded = self._run(
+            "encode",
+            "--json",
+            "--prompt",
+            prompt,
+            "--passphrase",
+            passphrase,
+            "--message",
+            message,
+            "--seed",
+            "17",
+        )
+        decoded = self._run(
+            "decode",
+            "--json",
+            "--prompt",
+            prompt,
+            "--passphrase",
+            passphrase,
+            "--text",
+            str(encoded["text"]),
+            "--seed",
+            "17",
+        )
+
+        self.assertEqual(decoded["plaintext"], message)
+        self.assertIn("packet_tokens", encoded)
+        self.assertIn("tail_tokens", encoded)
+        self.assertIn("trailing_tokens", decoded)
 
     def test_eval_progress_goes_to_stderr(self) -> None:
         completed = self._run_completed(
@@ -127,6 +167,7 @@ class CliTests(unittest.TestCase):
     def test_stall_patience_argument_is_accepted(self) -> None:
         payload = self._run(
             "encode",
+            "--json",
             "--prompt",
             "Write a calm and readable English paragraph.",
             "--passphrase",

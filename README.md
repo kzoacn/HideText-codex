@@ -128,6 +128,7 @@ Toy backend round-trip:
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --prompt 'Write a calm and readable English paragraph.' \
   --passphrase pass-en \
   --message 'Meet me near the station at seven.' \
@@ -138,6 +139,7 @@ Real Qwen CPU round-trip:
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --backend llama-cpp \
   --model-path models/qwen3-4b-q4km/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
   --threads 8 \
@@ -164,10 +166,29 @@ If you want file-based inputs:
 
 ```bash
 .venv/bin/python -m hidetext.cli eval \
+  --show-progress \
   --prompt-file prompts/zh.txt \
   --passphrase-file secrets/passphrase.txt \
   --seed-file secrets/seed.txt \
   --message '今晚七点在老地方见。'
+```
+
+`encode` now writes only the stego text by default, and `decode` writes only the recovered plaintext by default. Add `--json` on either command if you want the previous detailed metadata payload.
+
+This means a shell pipeline works directly:
+
+```bash
+.venv/bin/python -m hidetext.cli encode \
+  --show-progress \
+  --prompt 'Write a calm and readable English paragraph.' \
+  --passphrase pipe-pass \
+  --message 'Meet me near the station at seven.' \
+  --seed 29 \
+| .venv/bin/python -m hidetext.cli decode \
+  --show-progress \
+  --prompt 'Write a calm and readable English paragraph.' \
+  --passphrase pipe-pass \
+  --seed 29
 ```
 
 ## Examples
@@ -184,6 +205,7 @@ Command:
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
+  --show-progress \
   --prompt 'Write a calm and readable English paragraph about a quiet evening walk.' \
   --passphrase demo-en \
   --message 'Meet near the riverside at seven.' \
@@ -208,6 +230,7 @@ Command:
 
 ```bash
 .venv/bin/python -m hidetext.cli encode \
+  --show-progress \
   --prompt '请写一段自然、柔和、连贯的中文短文，描写傍晚散步时看到的街景。' \
   --passphrase demo-zh \
   --message '今晚七点在河边老地方见。' \

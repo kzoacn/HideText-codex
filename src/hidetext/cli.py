@@ -54,9 +54,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     encode_parser = subparsers.choices["encode"]
     encode_parser.add_argument("--message", required=True)
+    encode_parser.add_argument("--json", action="store_true")
 
     decode_parser = subparsers.choices["decode"]
-    decode_parser.add_argument("--text", required=True)
+    decode_text_group = decode_parser.add_mutually_exclusive_group(required=False)
+    decode_text_group.add_argument("--text")
+    decode_text_group.add_argument("--text-file")
+    decode_parser.add_argument("--json", action="store_true")
 
     eval_parser = subparsers.choices["eval"]
     eval_parser.add_argument("--message", required=True)
@@ -97,6 +101,26 @@ def _resolve_seed(args: argparse.Namespace) -> int:
         return int(raw_text)
     except ValueError as exc:
         raise ValueError(f"seed file {args.seed_file!r} does not contain a valid integer") from exc
+
+
+def _resolve_decode_text(args: argparse.Namespace) -> str:
+    if getattr(args, "text", None) is not None or getattr(args, "text_file", None) is not None:
+        return _resolve_text_value(
+            getattr(args, "text", None),
+            getattr(args, "text_file", None),
+            label="text",
+        )
+    if sys.stdin.isatty():
+        raise ValueError("decode requires --text, --text-file, or stego text on stdin")
+    text = sys.stdin.read().rstrip("\r\n")
+    if not text:
+        raise ValueError("decode requires non-empty stego text on stdin")
+    return text
+
+
+def _write_plain_output(text: str) -> None:
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 def _config_from_args(args: argparse.Namespace, *, seed: int) -> RuntimeConfig:
@@ -209,59 +233,66 @@ def main() -> None:
             prompt=prompt,
             progress_callback=progress_reporter,
         )
-        print(
-            json.dumps(
-                {
-                    "text": result.text,
-                    "backend": args.backend,
-                    "config_fingerprint": f"{result.config_fingerprint:016x}",
-                    "packet_len": len(result.packet),
-                    "total_tokens": result.total_tokens,
-                    "packet_tokens": result.packet_tokens,
-                    "tail_tokens": result.tail_tokens,
-                    "attempts_used": result.attempts_used,
-                    "elapsed_seconds": round(result.elapsed_seconds, 4),
-                    "tokens_per_second": round(result.tokens_per_second, 4),
-                    "bits_per_token": round(result.bits_per_token, 4),
-                    "segments": [
-                        {
-                            "name": segment.name,
-                            "tokens_used": segment.tokens_used,
-                            "encoding_steps": segment.encoding_steps,
-                            "embedded_bits": round(segment.embedded_bits, 4),
-                        }
-                        for segment in result.segment_stats
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "text": result.text,
+                        "backend": args.backend,
+                        "config_fingerprint": f"{result.config_fingerprint:016x}",
+                        "packet_len": len(result.packet),
+                        "total_tokens": result.total_tokens,
+                        "packet_tokens": result.packet_tokens,
+                        "tail_tokens": result.tail_tokens,
+                        "attempts_used": result.attempts_used,
+                        "elapsed_seconds": round(result.elapsed_seconds, 4),
+                        "tokens_per_second": round(result.tokens_per_second, 4),
+                        "bits_per_token": round(result.bits_per_token, 4),
+                        "segments": [
+                            {
+                                "name": segment.name,
+                                "tokens_used": segment.tokens_used,
+                                "encoding_steps": segment.encoding_steps,
+                                "embedded_bits": round(segment.embedded_bits, 4),
+                            }
+                            for segment in result.segment_stats
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
             )
-        )
+        else:
+            _write_plain_output(result.text)
         return
 
     if args.command == "decode":
+        stego_text = _resolve_decode_text(args)
         result = StegoDecoder(backend, config).decode(
-            args.text,
+            stego_text,
             passphrase=passphrase,
             prompt=prompt,
             progress_callback=progress_reporter,
         )
-        print(
-            json.dumps(
-                {
-                    "plaintext": result.plaintext,
-                    "backend": args.backend,
-                    "consumed_tokens": result.consumed_tokens,
-                    "trailing_tokens": result.trailing_tokens,
-                    "packet_len": len(result.packet),
-                    "elapsed_seconds": round(result.elapsed_seconds, 4),
-                    "tokens_per_second": round(result.tokens_per_second, 4),
-                    "bits_per_token": round(result.bits_per_token, 4),
-                },
-                ensure_ascii=False,
-                indent=2,
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "plaintext": result.plaintext,
+                        "backend": args.backend,
+                        "consumed_tokens": result.consumed_tokens,
+                        "trailing_tokens": result.trailing_tokens,
+                        "packet_len": len(result.packet),
+                        "elapsed_seconds": round(result.elapsed_seconds, 4),
+                        "tokens_per_second": round(result.tokens_per_second, 4),
+                        "bits_per_token": round(result.bits_per_token, 4),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
             )
-        )
+        else:
+            _write_plain_output(result.plaintext)
         return
 
     if args.command == "eval":
