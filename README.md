@@ -18,6 +18,7 @@ The project is intentionally optimized for reproducibility and decodability befo
 - fail-closed negative tests for prompt drift, seed drift, text mutation, and retry exhaustion
 - low-entropy monitoring with automatic re-attempts
 - natural tail generation after the secret-bearing prefix is complete
+- retokenization-stability filtering so ambiguous token boundaries are rejected before encoding
 
 ## Quick start
 
@@ -102,6 +103,24 @@ HideText no longer has to stop exactly at the token where the packet becomes dec
 - decoding stops as soon as the packet is fully recovered, even if more text follows
 
 Use `--natural-tail-max-tokens` to cap how many post-packet tokens may be sampled. Set it to `0` if you want the old stop-immediately behavior.
+
+## Retokenization safety
+
+HideText now rejects candidates that would change token boundaries when the visible text is retokenized. This protects cases such as:
+
+- one token rendering as `冷却`
+- two-step output rendering as `冷` then `却`
+
+Even though the text looks the same, the decoder replays token ids, not surface strings. The current candidate policy therefore keeps only candidates for which:
+
+- append the candidate to the current token prefix
+- detokenize that full prefix into text
+- retokenize the text
+- require the resulting token ids to match exactly
+
+If the stable set drops below two entries, that step becomes a non-encoding step. If no stable candidate remains, HideText fails closed instead of emitting potentially undecodable text.
+
+When this happens during the secret-bearing prefix, the encoder now treats it as a retryable condition: it rebuilds the packet with a fresh random salt/nonce and tries again, up to the configured `--max-encode-attempts`.
 
 ## CLI usage
 

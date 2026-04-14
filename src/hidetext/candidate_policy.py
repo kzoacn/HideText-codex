@@ -5,6 +5,7 @@ import math
 import numpy as np
 
 from .config import CandidatePolicyConfig
+from .errors import ModelBackendError, UnsafeTokenizationError
 from .model_backend import RawNextTokenDistribution, TextBackend, TokenProb
 
 
@@ -24,12 +25,23 @@ def select_candidates(
     config: CandidatePolicyConfig,
     *,
     backend: TextBackend | None = None,
+    prompt: str | None = None,
+    generated_token_ids: list[int] | None = None,
 ) -> CandidateSelection:
+    selection: CandidateSelection
     if isinstance(distribution, RawNextTokenDistribution):
         if backend is None:
             raise ValueError("backend is required for raw distributions")
-        return _select_from_raw_distribution(distribution, config, backend=backend)
-    return _select_from_probs(distribution, config)
+        selection = _select_from_raw_distribution(distribution, config, backend=backend)
+    else:
+        selection = _select_from_probs(distribution, config)
+    return _enforce_retokenization_stability(
+        selection,
+        config,
+        backend=backend,
+        prompt=prompt,
+        generated_token_ids=generated_token_ids,
+    )
 
 
 def _select_from_probs(
@@ -152,3 +164,69 @@ def _select_from_raw_distribution(
         entropy_bits=entropy_bits,
         allows_encoding=allows_encoding,
     )
+
+
+def _enforce_retokenization_stability(
+    selection: CandidateSelection,
+    config: CandidatePolicyConfig,
+    *,
+    backend: TextBackend | None,
+    prompt: str | None,
+    generated_token_ids: list[int] | None,
+) -> CandidateSelection:
+    if not config.enforce_retokenization_stability:
+        return selection
+    if backend is None or prompt is None or generated_token_ids is None:
+        return selection
+
+    stable_entries = [
+        entry
+        for entry in selection.entries
+        if _is_retokenization_stable(
+            backend,
+            prompt=prompt,
+            generated_token_ids=generated_token_ids,
+            token_id=entry.token_id,
+        )
+    ]
+    if not stable_entries:
+        raise UnsafeTokenizationError(
+            "candidate selection contains no retokenization-stable token"
+        )
+
+    total_probability = sum(entry.probability for entry in stable_entries)
+    normalized = [
+        TokenProb(
+            token=entry.token,
+            token_id=entry.token_id,
+            probability=entry.probability / total_probability,
+        )
+        for entry in stable_entries
+    ]
+    entropy_bits = -sum(
+        entry.probability * math.log2(entry.probability)
+        for entry in normalized
+        if entry.probability > 0.0
+    )
+    allows_encoding = len(normalized) >= 2 and entropy_bits >= config.min_entropy_bits
+    return CandidateSelection(
+        entries=tuple(normalized),
+        entropy_bits=entropy_bits,
+        allows_encoding=allows_encoding,
+    )
+
+
+def _is_retokenization_stable(
+    backend: TextBackend,
+    *,
+    prompt: str,
+    generated_token_ids: list[int],
+    token_id: int,
+) -> bool:
+    candidate_token_ids = [*generated_token_ids, token_id]
+    try:
+        rendered = backend.render(candidate_token_ids)
+        retokenized = backend.tokenize(rendered, prompt)
+    except ModelBackendError:
+        return False
+    return retokenized == candidate_token_ids

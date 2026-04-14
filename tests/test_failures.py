@@ -5,8 +5,13 @@ import numpy as np
 
 from hidetext.config import CandidatePolicyConfig, CodecConfig, RuntimeConfig
 from hidetext.decoder import StegoDecoder
-from hidetext.encoder import StegoEncoder
-from hidetext.errors import HideTextError, LowEntropyRetryLimitError, StallDetectedError
+from hidetext.encoder import SegmentStats, StegoEncoder
+from hidetext.errors import (
+    HideTextError,
+    LowEntropyRetryLimitError,
+    StallDetectedError,
+    UnsafeTokenizationError,
+)
 from hidetext.model_backend import BackendMetadata, RawNextTokenDistribution, ToyCharBackend
 from hidetext.packet import HEADER_SIZE
 
@@ -262,6 +267,78 @@ class FailureTests(unittest.TestCase):
                     passphrase="hunter2",
                     prompt="test prompt",
                 )
+
+        self.assertEqual(build_packet_mock.call_count, 3)
+        self.assertIn("Try a different prompt or reduce the message length.", str(ctx.exception))
+
+    def test_unsafe_tokenization_error_retries_with_fresh_packet(self) -> None:
+        backend = RetrySensitiveBackend()
+        config = RuntimeConfig(
+            seed=7,
+            codec=CodecConfig(
+                natural_tail_max_tokens=0,
+                max_encode_attempts=3,
+            ),
+        )
+        encoder = StegoEncoder(backend, config)
+        first_packet = (b"H" * HEADER_SIZE) + b"\x00"
+        second_packet = (b"H" * HEADER_SIZE) + b"\x01"
+        with mock.patch(
+            "hidetext.encoder.build_packet",
+            side_effect=[first_packet, second_packet],
+        ) as build_packet_mock:
+            with mock.patch.object(
+                encoder,
+                "_encode_packet",
+                side_effect=[
+                    UnsafeTokenizationError("candidate selection contains no retokenization-stable token"),
+                    ([0], [SegmentStats("body", 1, 1, 8.0)]),
+                ],
+            ):
+                result = encoder.encode(
+                    "retry me",
+                    passphrase="hunter2",
+                    prompt="test prompt",
+                )
+
+        self.assertEqual(build_packet_mock.call_count, 2)
+        self.assertEqual(result.attempts_used, 2)
+        self.assertEqual(result.text, "a")
+
+    def test_unsafe_tokenization_retry_limit_reports_actionable_error(self) -> None:
+        backend = RetrySensitiveBackend()
+        config = RuntimeConfig(
+            seed=7,
+            codec=CodecConfig(
+                natural_tail_max_tokens=0,
+                max_encode_attempts=3,
+            ),
+        )
+        encoder = StegoEncoder(backend, config)
+        packets = [
+            (b"H" * HEADER_SIZE) + b"\x00",
+            (b"H" * HEADER_SIZE) + b"\x01",
+            (b"H" * HEADER_SIZE) + b"\x02",
+        ]
+        with mock.patch(
+            "hidetext.encoder.build_packet",
+            side_effect=packets,
+        ) as build_packet_mock:
+            with mock.patch.object(
+                encoder,
+                "_encode_packet",
+                side_effect=[
+                    UnsafeTokenizationError("candidate selection contains no retokenization-stable token"),
+                    UnsafeTokenizationError("candidate selection contains no retokenization-stable token"),
+                    UnsafeTokenizationError("candidate selection contains no retokenization-stable token"),
+                ],
+            ):
+                with self.assertRaises(UnsafeTokenizationError) as ctx:
+                    encoder.encode(
+                        "retry me",
+                        passphrase="hunter2",
+                        prompt="test prompt",
+                    )
 
         self.assertEqual(build_packet_mock.call_count, 3)
         self.assertIn("Try a different prompt or reduce the message length.", str(ctx.exception))

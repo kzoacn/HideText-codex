@@ -7,7 +7,7 @@ import json
 
 PROTOCOL_VERSION = 1
 CODEC_VERSION = "finite-interval-v1"
-CANDIDATE_POLICY_VERSION = "top-p-maxk-v1"
+CANDIDATE_POLICY_VERSION = "top-p-maxk-retoken-stable-v2"
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,7 @@ class CandidatePolicyConfig:
     top_p: float = 0.97
     max_candidates: int = 16
     min_entropy_bits: float = 1.0
+    enforce_retokenization_stability: bool = True
 
     def as_protocol_dict(self) -> dict[str, object]:
         return {
@@ -22,6 +23,7 @@ class CandidatePolicyConfig:
             "top_p": self.top_p,
             "max_candidates": self.max_candidates,
             "min_entropy_bits": self.min_entropy_bits,
+            "enforce_retokenization_stability": self.enforce_retokenization_stability,
         }
 
 

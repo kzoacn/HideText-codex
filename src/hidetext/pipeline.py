@@ -14,5 +14,11 @@ def prepare_quantized_distribution(
     config: RuntimeConfig,
 ) -> QuantizedDistribution:
     distribution = backend.distribution(prompt, generated_token_ids, config.seed)
-    selection = select_candidates(distribution, config.candidate_policy, backend=backend)
+    selection = select_candidates(
+        distribution,
+        config.candidate_policy,
+        backend=backend,
+        prompt=prompt,
+        generated_token_ids=generated_token_ids,
+    )
     return quantize_candidates(selection, config.codec.total_frequency)

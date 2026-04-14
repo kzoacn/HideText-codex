@@ -34,5 +34,9 @@ class LowEntropyRetryLimitError(HideTextError):
     """Raised when repeated encoding attempts all fall into a low-entropy regime."""
 
 
+class UnsafeTokenizationError(HideTextError):
+    """Raised when every candidate would retokenize into a different token path."""
+
+
 class ModelBackendError(HideTextError):
     """Raised when the backend cannot provide or parse tokens."""

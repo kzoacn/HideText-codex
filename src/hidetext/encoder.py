@@ -9,7 +9,12 @@ from time import perf_counter
 from .codec import MessageSegmentEncoder
 from .config import RuntimeConfig
 from .crypto import build_packet
-from .errors import EncodingExhaustedError, LowEntropyRetryLimitError, StallDetectedError
+from .errors import (
+    EncodingExhaustedError,
+    LowEntropyRetryLimitError,
+    StallDetectedError,
+    UnsafeTokenizationError,
+)
 from .model_backend import TextBackend
 from .packet import HEADER_SIZE
 from .pipeline import prepare_quantized_distribution
@@ -135,18 +140,20 @@ class StegoEncoder:
             except _LowEntropyWindowTriggered as exc:
                 if attempt_index + 1 < attempts_allowed:
                     continue
-                retry_hint = "Try a different prompt or reduce the message length."
-                if not can_retry:
-                    retry_hint = (
-                        "Automatic retry is disabled when both salt and nonce are fixed. "
-                        + retry_hint
-                    )
                 raise LowEntropyRetryLimitError(
                     "encoding entered a low-entropy regime: "
                     f"{exc.segment_name} rolling average entropy stayed at "
                     f"{exc.average_entropy_bits:.3f} bits over "
                     f"{self.config.codec.low_entropy_window_tokens} consecutive tokens "
-                    f"across {attempt_index + 1} attempt(s). {retry_hint}"
+                    f"across {attempt_index + 1} attempt(s). {self._retry_hint(can_retry)}"
+                ) from exc
+            except UnsafeTokenizationError as exc:
+                if attempt_index + 1 < attempts_allowed:
+                    continue
+                raise UnsafeTokenizationError(
+                    "encoding encountered a retokenization-unstable candidate set and "
+                    f"could not find a safe token path across {attempt_index + 1} "
+                    f"attempt(s). {self._retry_hint(can_retry)}"
                 ) from exc
             self._extend_with_natural_tail(
                 packet=packet,
@@ -232,12 +239,15 @@ class StegoEncoder:
 
         rng = random.Random(self._natural_tail_seed(packet=packet, attempt_index=attempt_index))
         for _ in range(max_tail_tokens):
-            quantized = prepare_quantized_distribution(
-                self.backend,
-                prompt=prompt,
-                generated_token_ids=generated_token_ids,
-                config=self.config,
-            )
+            try:
+                quantized = prepare_quantized_distribution(
+                    self.backend,
+                    prompt=prompt,
+                    generated_token_ids=generated_token_ids,
+                    config=self.config,
+                )
+            except UnsafeTokenizationError:
+                break
             generated_token_ids.append(self._sample_tail_token_id(quantized, rng))
             recent_text = self.backend.render(generated_token_ids)[-64:]
             if self._looks_naturally_finished(recent_text):
@@ -261,6 +271,12 @@ class StegoEncoder:
             if draw <= cumulative:
                 return entry.token_id
         return distribution.entries[-1].token_id
+
+    def _retry_hint(self, can_retry: bool) -> str:
+        retry_hint = "Try a different prompt or reduce the message length."
+        if not can_retry:
+            return "Automatic retry is disabled when both salt and nonce are fixed. " + retry_hint
+        return retry_hint
 
     def _looks_naturally_finished(self, text: str) -> bool:
         trimmed = text.rstrip()

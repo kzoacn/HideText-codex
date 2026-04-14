@@ -227,9 +227,10 @@ magic[4] | version[1] | flags[1] | kdf_id[1] | aead_id[1] | salt_len[1] | nonce_
 
 1. 先屏蔽不允许的特殊 token
 2. 根据固定规则裁剪候选集
-3. 对候选集重新归一化
-4. 计算该步熵 `H_t`
-5. 决定该步是否允许嵌入消息
+3. 过滤掉会导致 `detokenize -> tokenize` 后 token 路径变化的候选
+4. 对剩余候选重新归一化
+5. 计算该步熵 `H_t`
+6. 决定该步是否允许嵌入消息
 
 ### 13.2 默认建议
 
@@ -238,6 +239,8 @@ magic[4] | version[1] | flags[1] | kdf_id[1] | aead_id[1] | salt_len[1] | nonce_
 - 先按概率降序排序，tie-break 使用 token id
 - 使用 `top-p` 截断，例如 `p = 0.95 ~ 0.98`
 - 同时设置 `max_candidates`，例如 `32` 或 `64`
+- 对每个候选 token，都检查“当前前缀 + 该 token”在渲染为文本后重新 tokenize，是否仍然回到完全相同的 token 前缀
+- 任何会改变 token 边界的候选都必须剔除，而不是赌解码端会走同一路径
 - 若候选集大小小于 `2`，则该步不编码
 - 若 `H_t < H_min`，则该步不编码
 
@@ -245,12 +248,13 @@ magic[4] | version[1] | flags[1] | kdf_id[1] | aead_id[1] | salt_len[1] | nonce_
 
 如果某一步不编码消息，则发送端与接收端都应使用相同的确定性规则选 token，例如：
 
-- 选择候选集中的最高概率 token
+- 选择“稳定候选集”中的最高概率 token
 
 这样做的目的：
 
 - 保持上下文同步
 - 避免低熵位置引入不稳定选择
+- 避免可见文本相同但 token 路径不同的重分词歧义
 
 ## 14. 概率量化
 
@@ -351,6 +355,14 @@ magic[4] | version[1] | flags[1] | kdf_id[1] | aead_id[1] | salt_len[1] | nonce_
 - 当 `low_entropy_window_tokens <= 0` 时，可显式关闭这个 detector，用于固定 packet 的受控实验
 - 这样可以比单纯等待 stall detector 更早发现“候选集虽然还在变化，但平均信息量已经接近 0 bit”的路径
 
+当前实现还加入了 `retokenization-stability retry`：
+
+- 如果某一步经过稳定性过滤后，一个可安全候选都不剩
+- 则发送端不应继续输出一个可能无法被镜像 replay 的 token
+- 对于尚未完成的 packet-bearing prefix，发送端应放弃当前尝试，并用新的随机 `salt / nonce` 重建 packet 后重试
+- 如果达到最大尝试次数后仍然找不到安全路径，应显式报错，并建议更换 prompt 或减少消息长度
+- 对于 packet 完成之后的 `natural tail`，则可以直接停止补尾，而不必让整个编码失败
+
 当前实现还加入了 `natural tail` 运行策略：
 
 - 一旦 packet 已经完整编码，发送端不必立刻停止
@@ -397,6 +409,7 @@ max_encode_attempts = 3
 10. 真实模型进入长时间零容量 stall
 11. 真实模型进入持续低熵区，连续多个 token 的平均熵接近 0，导致同一次 packet 路径无法完成编码
 12. 文本尾部被额外追加内容；此时只要 packet-bearing prefix 未变，解码应忽略 trailing tail 而不是误把它当成协议错误
+13. 文本前缀虽然表面字符相同，但会被 tokenizer 重新切成另一条 token 路径，例如 `冷却` 与 `冷` + `却`
 
 默认处理方式：
 
