@@ -32,6 +32,7 @@ ghostext encode \
 ghostext --help
 ghostext encode --help
 ghostext decode --help
+ghostext benchmark --help
 ```
 
 第一次运行时，Ghostext 会按下面的顺序找模型：
@@ -157,6 +158,27 @@ ghostext encode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
   --message 'Meet near the riverside at seven.'
+```
+
+## 简单 benchmark
+
+可以用 `benchmark` 子命令快速测这四个指标：
+
+- `encode latency`
+- `decode latency`
+- `encode bits/token`
+- `ppl`
+
+使用本地 LLM 后端（`llama-cpp`），并沿用 README 开头示例里的英文 `prompt/passphrase/message`：
+
+```bash
+ghostext benchmark \
+  --backend llama-cpp \
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Attack at Dawn!' \
+  --runs 3 \
+  --json
 ```
 
 ## 深入说明

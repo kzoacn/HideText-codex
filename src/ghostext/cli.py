@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import math
 import json
 from pathlib import Path
 import sys
 
+from .benchmark import run_simple_benchmark
 from .config import RuntimeConfig
 from .decoder import StegoDecoder
 from .encoder import StegoEncoder
@@ -33,6 +35,13 @@ from .model_assets import (
 from .progress import ProgressSnapshot
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("value must be >= 1")
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ghostext",
@@ -44,22 +53,31 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{encode,decode}",
+        metavar="{encode,decode,benchmark}",
         help="subcommand to run",
     )
 
-    for name in ("encode", "decode"):
+    for name in ("encode", "decode", "benchmark"):
         if name == "encode":
             subparser = subparsers.add_parser(
                 "encode",
                 help="hide a message into generated text",
                 description="Encode a secret message into cover text.",
             )
-        else:
+        elif name == "decode":
             subparser = subparsers.add_parser(
                 "decode",
                 help="recover a message from stego text",
                 description="Decode a secret message from stego text.",
+            )
+        else:
+            subparser = subparsers.add_parser(
+                "benchmark",
+                help="run a simple end-to-end benchmark",
+                description=(
+                    "Run encode/decode and report encode latency, decode latency, "
+                    "encode bits/token, and ppl."
+                ),
             )
         prompt_group = subparser.add_mutually_exclusive_group(required=True)
         prompt_group.add_argument("--prompt", help="shared prompt text")
@@ -171,6 +189,16 @@ def _build_parser() -> argparse.ArgumentParser:
     decode_text_group.add_argument("--text", help="stego text to decode")
     decode_text_group.add_argument("--text-file", help="file containing stego text")
     decode_parser.add_argument("--json", action="store_true", help="print structured JSON output")
+
+    benchmark_parser = subparsers.choices["benchmark"]
+    benchmark_parser.add_argument("--message", required=True, help="secret message to embed")
+    benchmark_parser.add_argument(
+        "--runs",
+        type=_positive_int,
+        default=1,
+        help="number of repeated runs to average",
+    )
+    benchmark_parser.add_argument("--json", action="store_true", help="print structured JSON output")
 
     return parser
 
@@ -462,6 +490,34 @@ def main() -> None:
             )
         else:
             _write_plain_output(result.plaintext)
+        return
+
+    if args.command == "benchmark":
+        result = run_simple_benchmark(
+            backend,
+            config,
+            prompt=prompt,
+            passphrase=passphrase,
+            message=args.message,
+            runs=args.runs,
+        )
+        payload = {
+            "backend": args.backend,
+            "runs": result.runs,
+            "encode_latency_seconds": round(result.encode_latency_seconds, 6),
+            "decode_latency_seconds": round(result.decode_latency_seconds, 6),
+            "encode_bits_per_token": round(result.encode_bits_per_token, 6),
+            "ppl": ("inf" if math.isinf(result.ppl) else round(result.ppl, 6)),
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"backend: {payload['backend']}")
+            print(f"runs: {payload['runs']}")
+            print(f"encode_latency_seconds: {payload['encode_latency_seconds']}")
+            print(f"decode_latency_seconds: {payload['decode_latency_seconds']}")
+            print(f"encode_bits_per_token: {payload['encode_bits_per_token']}")
+            print(f"ppl: {payload['ppl']}")
         return
 
     raise AssertionError(f"unsupported command: {args.command}")

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -45,9 +46,9 @@ class CliTests(unittest.TestCase):
         completed = self._run_completed(*args)
         return json.loads(completed.stdout)
 
-    def test_top_level_help_lists_encode_decode(self) -> None:
+    def test_top_level_help_lists_commands(self) -> None:
         completed = self._run_completed("--help")
-        self.assertIn("{encode,decode}", completed.stdout)
+        self.assertIn("{encode,decode,benchmark}", completed.stdout)
         self.assertIn("subcommand to run", completed.stdout)
 
     def test_encode_help_mentions_message_and_quiet(self) -> None:
@@ -166,6 +167,32 @@ class CliTests(unittest.TestCase):
         self.assertIn("packet_tokens", encoded)
         self.assertIn("tail_tokens", encoded)
         self.assertIn("trailing_tokens", decoded)
+
+    def test_benchmark_reports_latency_bits_per_token_and_ppl(self) -> None:
+        payload = self._run(
+            "benchmark",
+            "--backend",
+            "toy",
+            "--json",
+            "--prompt",
+            "Write a calm and readable English paragraph.",
+            "--passphrase",
+            "bench-pass",
+            "--message",
+            "benchmark message",
+            "--runs",
+            "2",
+        )
+        self.assertEqual(payload["runs"], 2)
+        self.assertIn("encode_latency_seconds", payload)
+        self.assertIn("decode_latency_seconds", payload)
+        self.assertIn("encode_bits_per_token", payload)
+        self.assertIn("ppl", payload)
+        self.assertGreaterEqual(float(payload["encode_latency_seconds"]), 0.0)
+        self.assertGreaterEqual(float(payload["decode_latency_seconds"]), 0.0)
+        self.assertGreater(float(payload["encode_bits_per_token"]), 0.0)
+        self.assertTrue(math.isfinite(float(payload["ppl"])))
+        self.assertGreaterEqual(float(payload["ppl"]), 1.0)
 
     def test_progress_default_on_for_encode(self) -> None:
         completed = self._run_completed(

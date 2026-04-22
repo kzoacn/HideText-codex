@@ -33,6 +33,7 @@ See all command options:
 ghostext --help
 ghostext encode --help
 ghostext decode --help
+ghostext benchmark --help
 ```
 
 On the first run, Ghostext will:
@@ -158,6 +159,27 @@ ghostext encode \
   --prompt 'Write a short paragraph about a quiet evening walk.' \
   --passphrase demo-pass \
   --message 'Attack at Dawn!'
+```
+
+## Simple benchmark
+
+Run a quick benchmark to measure:
+
+- `encode latency`
+- `decode latency`
+- `encode bits/token`
+- `ppl`
+
+Use the local LLM backend (`llama-cpp`) with the same prompt/passphrase/message shown in the quick start:
+
+```bash
+ghostext benchmark \
+  --backend llama-cpp \
+  --prompt 'Write a short, natural paragraph about a quiet evening walk.' \
+  --passphrase demo-pass \
+  --message 'Attack at Dawn!' \
+  --runs 3 \
+  --json
 ```
 
 ## More detail

@@ -497,6 +497,13 @@ max_encode_attempts = 10
 - CPU 下解码耗时
 - tokens/sec
 
+当前 CLI 提供 `ghostext benchmark` 作为最小评测入口，至少输出：
+
+- `encode_latency_seconds`
+- `decode_latency_seconds`
+- `encode_bits_per_token`
+- `ppl`
+
 ## 19. 测试计划
 
 至少需要以下测试层次：
