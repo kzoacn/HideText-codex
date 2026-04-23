@@ -182,6 +182,40 @@ ghostext benchmark \
   --json
 ```
 
+## Reproducible 10x10 evaluation
+
+If you want a larger artifact-style run instead of the built-in smoke benchmark,
+the repo now includes a fixed 10 prompt x 10 message evaluation script.
+
+Run it from a checkout of this repository:
+
+```bash
+python3 scripts/run_prompt_message_grid.py
+```
+
+Or use the small wrapper:
+
+```bash
+bash scripts/reproduce_prompt_message_grid.sh
+```
+
+For a quick sanity check before the full 100-trial run:
+
+```bash
+python3 scripts/run_prompt_message_grid.py --max-trials 1 --out-dir /tmp/ghostext-grid-smoke
+```
+
+By default this writes results under `results/prompt-message-grid/` and produces:
+
+- `prompt_message_grid_dataset.json`
+- `prompt_message_grid_runs.jsonl`
+- `prompt_message_grid_summary.json`
+- `prompt_message_grid_summary.md`
+
+This evaluation uses the same local `llama-cpp` backend and default runtime
+settings as the main CLI path, but it measures a broader fixed grid of public
+prompts and messages instead of one README demo case.
+
 ## More detail
 
 Use [spec.md](spec.md) if you want the protocol-level design and implementation notes. The README is intentionally optimized for getting from install to a working round-trip as quickly as possible.
